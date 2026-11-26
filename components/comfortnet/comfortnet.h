@@ -236,6 +236,7 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
   NodeType pending_poll_node_type_{NodeType::ANY};
   bool queue_next_poll_(uint32_t now, bool allow_queued_messages = false);
   void publish_pending_message_count_();
+  void queue_next_user_menu_probe_();
   void log_unknown_furnace_mdi_(MessageType message_type, const uint8_t *payload, uint8_t payload_len);
   bool queue_control_command_(NodeType target_type, CommandType command, const std::vector<uint8_t> &command_data);
   void read_buffer_(int bytes_available, uint32_t now);
@@ -318,7 +319,8 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
   bool direct_poll_mode_{false};                                // Fallback mode after prolonged R2R silence
   bool direct_poll_command_waiting_tx_{false};
   bool direct_poll_command_waiting_response_{false};
-  bool user_menu_scan_started_{false};
+  bool user_menu_probe_started_{false};
+  uint8_t user_menu_probe_index_{0};
   uint32_t direct_poll_command_tx_time_{0};
   QueuedMessageType message_queued_{QueuedMessageType::NONE};  // Whether we should arbitrate, or are sending normally
   bool awaiting_discovery_;                                    // Whether we are in the discovery process

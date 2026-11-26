@@ -1,4 +1,5 @@
 #include "comfortnet.h"
+#include <array>
 #include <utility>
 #ifndef ARDUINO
 #include "esp_timer.h"
@@ -59,6 +60,33 @@ static const std::string DATA_KEY_PENDING_MESSAGE_COUNT = "PENDING_MESSAGE_COUNT
 void Comfortnet::queue_message(PendingMessage message) {
   pending_messages_.push(std::move(message));
   publish_pending_message_count_();
+}
+
+void Comfortnet::queue_next_user_menu_probe_() {
+  static const std::array<std::array<uint8_t, 3>, 32> probes = []() {
+    std::array<std::array<uint8_t, 3>, 32> result{};
+    size_t index = 0;
+    for (uint8_t menu = 0; menu < 4; menu++) {
+      for (uint8_t item = 0; item < 4; item++) {
+        // Only actions 0 and 1 are documented reads. Do not probe undocumented action values.
+        for (uint8_t action = 0; action < 2; action++) {
+          result[index++] = {menu, item, action};
+        }
+      }
+    }
+    return result;
+  }();
+
+  if (!user_menu_probe_started_ || user_menu_probe_index_ >= probes.size()) {
+    return;
+  }
+
+  const auto &probe = probes[user_menu_probe_index_++];
+  std::vector<uint8_t> request_payload{probe[0], probe[1], probe[2]};
+  queue_message(PendingMessageToType(NodeType::GAS_FURNACE, MessageType::GET_USER_MENU,
+                                     std::move(request_payload)));
+  ESP_LOGI(TAG, "Queued user/installer menu probe %u/32 (menu=%u item=%u action=%u)",
+           static_cast<unsigned int>(user_menu_probe_index_), probe[0], probe[1], probe[2]);
 }
 
 void Comfortnet::publish_pending_message_count_() {
@@ -653,8 +681,15 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
                 message_type == MessageType::GET_USER_MENU_RESPONSE) {
               char menu_payload_hex[3 * MAX_PAYLOAD_SIZE + 1];
               esphome::format_hex_pretty_to(menu_payload_hex, sizeof(menu_payload_hex), payload, payload_len, '.');
-              ESP_LOGI(TAG, "User/installer menu root response 0xC1 len=%u payload=%s", payload_len,
-                       menu_payload_hex);
+              const auto &request = pending_messages_.front().payload;
+              if (request.size() == 3) {
+                ESP_LOGI(TAG,
+                         "User/installer menu response 0xC1 menu=%u item=%u action=%u len=%u payload=%s",
+                         request[0], request[1], request[2], payload_len, menu_payload_hex);
+              } else {
+                ESP_LOGI(TAG, "User/installer menu response 0xC1 len=%u payload=%s", payload_len,
+                         menu_payload_hex);
+              }
             }
             if (poll_request_pending_ && pending_messages_.front().packet_type == pending_poll_message_ &&
                 pending_messages_.front().send_method == SendMethod::NODE_TYPE &&
@@ -668,6 +703,9 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
             pending_messages_.pop();
             this->direct_poll_command_waiting_response_ = false;
             publish_pending_message_count_();
+            if (message_type == MessageType::GET_USER_MENU_RESPONSE && this->user_menu_probe_started_) {
+              queue_next_user_menu_probe_();
+            }
           }
         }
         if (should_ack == MessageAckAction::UNKNOWN && message_type == MessageType::GET_NODE_ID) {
@@ -784,12 +822,10 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
         ESP_LOGI(TAG, "Joined network as address: 0x%02X", static_cast<unsigned int>(this->node_id_));
         call_listener_(DATA_KEY_NETWORK_STATUS,
                        (struct ComfortnetData) {this->device_type_, ComfortnetData::DataType::BOOLEAN, true});
-        if (!this->user_menu_scan_started_) {
-          this->user_menu_scan_started_ = true;
-          std::vector<uint8_t> menu_request{0x00, 0x00, 0x00};
-          queue_message(PendingMessageToType(NodeType::GAS_FURNACE, MessageType::GET_USER_MENU,
-                                             std::move(menu_request)));
-          ESP_LOGI(TAG, "Queued initial user/installer menu root request (packet=0x41 menu=0 item=0 action=0)");
+        if (!this->user_menu_probe_started_) {
+          this->user_menu_probe_started_ = true;
+          this->user_menu_probe_index_ = 0;
+          queue_next_user_menu_probe_();
         }
       } else if (start_id != this->node_id_) {
         ESP_LOGI(TAG, "Network address reassigned: 0x%02X (Old: 0x%02X)", static_cast<unsigned int>(this->node_id_),
@@ -973,7 +1009,8 @@ void Comfortnet::disconnect_() {
   direct_poll_mode_ = false;
   direct_poll_command_waiting_tx_ = false;
   direct_poll_command_waiting_response_ = false;
-  user_menu_scan_started_ = false;
+  user_menu_probe_started_ = false;
+  user_menu_probe_index_ = 0;
   direct_poll_command_tx_time_ = 0;
   awaiting_discovery_ = false;
   has_won_token_broadcast_ = false;
