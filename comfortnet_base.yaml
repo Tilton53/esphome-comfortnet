@@ -36,45 +36,82 @@ preferences:
 wifi:
   ap:
 captive_portal:
-# api:
-#   services:
-#     - service: read
-#       variables:
-#         datapoint_id: string
-#       then:
-#         - lambda: id(comfortnet_id).homeassistant_read(datapoint_id);
-#     - service: read_from_address
-#       variables:
-#         datapoint_id: string
-#         address: int
-#       then:
-#         - lambda: id(comfortnet_id).homeassistant_read(datapoint_id, (uint8_t) address);
-#     - service: write_enum
-#       variables:
-#         datapoint_id: string
-#         value: int
-#       then:
-#         - lambda: id(comfortnet_id).homeassistant_write(datapoint_id, (uint8_t) value);
-#     - service: write_enum_from_address
-#       variables:
-#         datapoint_id: string
-#         value: int
-#         address: int
-#       then:
-#         - lambda: id(comfortnet_id).homeassistant_write(datapoint_id, (uint8_t) value, (uint8_t) address);
-#     - service: write_float
-#       variables:
-#         datapoint_id: string
-#         value: float
-#       then:
-#         - lambda: id(comfortnet_id).homeassistant_write(datapoint_id, value);
-#     - service: write_float_from_address
-#       variables:
-#         datapoint_id: string
-#         value: float
-#         address: int
-#       then:
-#         - lambda: id(comfortnet_id).homeassistant_write(datapoint_id, value, (uint8_t) address);
+api:
+  services:
+    - service: thermostat_set_heat_setpoint
+      variables:
+        temperature_f: int
+      then:
+        - lambda: id(comfortnet_id).thermostat_set_heat_setpoint(temperature_f);
+    - service: thermostat_set_cool_setpoint
+      variables:
+        temperature_f: int
+      then:
+        - lambda: id(comfortnet_id).thermostat_set_cool_setpoint(temperature_f);
+    - service: thermostat_set_system_mode
+      variables:
+        mode: int
+      then:
+        - lambda: id(comfortnet_id).thermostat_set_system_mode(mode);
+    - service: thermostat_set_fan_key
+      variables:
+        state: int
+        demand: int
+      then:
+        - lambda: id(comfortnet_id).thermostat_set_fan_key(state, demand);
+    - service: thermostat_set_hold_override
+      variables:
+        enabled: bool
+      then:
+        - lambda: id(comfortnet_id).thermostat_set_hold_override(enabled);
+    - service: furnace_set_heat_demand
+      variables:
+        demand_percent: int
+        duration_minutes: int
+      then:
+        - lambda: |-
+            id(comfortnet_id).furnace_set_demand(comfortnet::CommandType::HEAT_DEMAND, demand_percent,
+                                                 duration_minutes);
+    - service: furnace_set_cool_demand
+      variables:
+        demand_percent: int
+        duration_minutes: int
+      then:
+        - lambda: |-
+            id(comfortnet_id).furnace_set_demand(comfortnet::CommandType::COOL_DEMAND, demand_percent,
+                                                 duration_minutes);
+    - service: furnace_set_backup_heat_demand
+      variables:
+        demand_percent: int
+        duration_minutes: int
+      then:
+        - lambda: |-
+            id(comfortnet_id).furnace_set_demand(comfortnet::CommandType::BACK_UP_HEAT_DEMAND,
+                                                 demand_percent, duration_minutes);
+    - service: furnace_set_defrost_heat_demand
+      variables:
+        demand_percent: int
+        duration_minutes: int
+      then:
+        - lambda: |-
+            id(comfortnet_id).furnace_set_demand(comfortnet::CommandType::DEFROST_HEAT_DEMAND,
+                                                 demand_percent, duration_minutes);
+    - service: furnace_set_aux_heat_demand
+      variables:
+        demand_percent: int
+        duration_minutes: int
+      then:
+        - lambda: |-
+            id(comfortnet_id).furnace_set_demand(comfortnet::CommandType::AUX_HEAT_DEMAND, demand_percent,
+                                                 duration_minutes);
+    - service: furnace_set_fan_demand
+      variables:
+        mode: int
+        demand_percent: int
+        duration_minutes: int
+      then:
+        - lambda: |-
+            id(comfortnet_id).furnace_set_fan_demand(mode, demand_percent, duration_minutes);
 ota:
   platform: esphome
 logger:
@@ -108,6 +145,13 @@ binary_sensor:
     device_class: connectivity
     data_key: "NETWORK_STATUS"
 button:
+  - platform: template
+    name: "Reconnect to ComfortNet"
+    id: comfortnet_reconnect
+    icon: "mdi:lan-connect"
+    entity_category: "config"
+    on_press:
+      - lambda: id(comfortnet_id).reconnect();
   - platform: restart
     name: "Restart ESP"
     id: restart_esp

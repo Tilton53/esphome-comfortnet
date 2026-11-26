@@ -139,6 +139,7 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
   void set_device_type(uint8_t type) { device_type_ = static_cast<NodeType>(type); }
   void set_ct_version(uint8_t version) { ct_version_ = version; }
   void set_flow_control_pin(esphome::GPIOPin *flow_control_pin) { this->flow_control_pin_ = flow_control_pin; }
+  void reconnect();
 
   void set_update_interval(uint32_t interval_millis) { update_interval_millis_ = interval_millis; }
 
@@ -215,8 +216,18 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
 
   inline void queue_message(PendingMessage message) { pending_messages_.push(message); };
 
+  // ClimateTalk control-command helpers exposed through Home Assistant API services.
+  bool thermostat_set_heat_setpoint(int32_t temperature_f);
+  bool thermostat_set_cool_setpoint(int32_t temperature_f);
+  bool thermostat_set_system_mode(int32_t mode);
+  bool thermostat_set_fan_key(int32_t state, int32_t demand);
+  bool thermostat_set_hold_override(bool enabled);
+  bool furnace_set_demand(CommandType command, int32_t demand_percent, int32_t duration_minutes);
+  bool furnace_set_fan_demand(int32_t mode, int32_t demand_percent, int32_t duration_minutes);
+
  protected:
   uint32_t update_interval_millis_{30000};
+  bool queue_control_command_(NodeType target_type, CommandType command, const std::vector<uint8_t> &command_data);
   void read_buffer_(int bytes_available, uint32_t now);
   void handle_message_(bool is_tx, uint32_t now);
   uint16_t calculate_crc_(const uint8_t *data, uint8_t data_len);

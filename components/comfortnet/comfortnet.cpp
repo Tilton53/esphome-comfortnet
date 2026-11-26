@@ -1,4 +1,5 @@
 #include "comfortnet.h"
+#include <utility>
 #ifndef ARDUINO
 #include "esp_timer.h"
 #endif
@@ -53,11 +54,116 @@ static const uint8_t ADDRESS_MAC_POS = 2;
 // ComfortnetData keys for listeners
 static const std::string DATA_KEY_NETWORK_STATUS = "NETWORK_STATUS";
 
+bool Comfortnet::queue_control_command_(NodeType target_type, CommandType command,
+                                        const std::vector<uint8_t> &command_data) {
+  if (node_id_ == static_cast<NodeAddress>(0)) {
+    ESP_LOGW(TAG, "Cannot send control command while not joined to the ClimateTalk network");
+    return false;
+  }
+  if (command_data.size() + 2 > MAX_PAYLOAD_SIZE) {
+    ESP_LOGW(TAG, "Control command payload is too large");
+    return false;
+  }
+
+  std::vector<uint8_t> payload;
+  payload.reserve(command_data.size() + 2);
+  const uint16_t command_id = static_cast<uint16_t>(command);
+  payload.push_back(static_cast<uint8_t>(command_id & 0xFF));
+  payload.push_back(static_cast<uint8_t>((command_id >> 8) & 0xFF));
+  payload.insert(payload.end(), command_data.begin(), command_data.end());
+  queue_message(PendingMessageToType(target_type, MessageType::SET_CONTROL_COMMAND, std::move(payload)));
+  ESP_LOGI(TAG, "Queued control command 0x%04X for node type 0x%02X", command_id,
+           static_cast<unsigned int>(target_type));
+  return true;
+}
+
+bool Comfortnet::thermostat_set_heat_setpoint(int32_t temperature_f) {
+  if (temperature_f < 40 || temperature_f > 100) {
+    ESP_LOGW(TAG, "Heat setpoint must be between 40 and 100 degrees Fahrenheit");
+    return false;
+  }
+  return queue_control_command_(NodeType::THERMOSTAT, CommandType::HEAT_SET_POINT_TEMPERATURE_MODIFY,
+                                {static_cast<uint8_t>(temperature_f)});
+}
+
+bool Comfortnet::thermostat_set_cool_setpoint(int32_t temperature_f) {
+  if (temperature_f < 40 || temperature_f > 100) {
+    ESP_LOGW(TAG, "Cool setpoint must be between 40 and 100 degrees Fahrenheit");
+    return false;
+  }
+  return queue_control_command_(NodeType::THERMOSTAT, CommandType::COOL_SET_POINT_TEMPERATURE_MODIFY,
+                                {static_cast<uint8_t>(temperature_f)});
+}
+
+bool Comfortnet::thermostat_set_system_mode(int32_t mode) {
+  if (mode < 0 || mode > 4) {
+    ESP_LOGW(TAG, "System mode must be 0=off, 1=cool, 2=auto, 3=heat, or 4=backup heat");
+    return false;
+  }
+  return queue_control_command_(NodeType::THERMOSTAT, CommandType::SYSTEM_SWITCH_MODIFY,
+                                {static_cast<uint8_t>(mode)});
+}
+
+bool Comfortnet::thermostat_set_fan_key(int32_t state, int32_t demand) {
+  if (state < 0 || state > 1) {
+    ESP_LOGW(TAG, "Fan key state must be 0=auto or 1=manual");
+    return false;
+  }
+  std::vector<uint8_t> command_data{static_cast<uint8_t>(state)};
+  if (state == 1) {
+    if (demand < 0 || demand > 255) {
+      ESP_LOGW(TAG, "Manual fan demand must fit in one byte (0-255)");
+      return false;
+    }
+    command_data.push_back(static_cast<uint8_t>(demand));
+  }
+  return queue_control_command_(NodeType::THERMOSTAT, CommandType::FAN_KEY_SELECTION, command_data);
+}
+
+bool Comfortnet::thermostat_set_hold_override(bool enabled) {
+  return queue_control_command_(NodeType::THERMOSTAT, CommandType::HOLD_OVERRIDE,
+                                {static_cast<uint8_t>(enabled ? 1 : 0)});
+}
+
+bool Comfortnet::furnace_set_demand(CommandType command, int32_t demand_percent, int32_t duration_minutes) {
+  if (command != CommandType::HEAT_DEMAND && command != CommandType::COOL_DEMAND &&
+      command != CommandType::BACK_UP_HEAT_DEMAND && command != CommandType::DEFROST_HEAT_DEMAND &&
+      command != CommandType::AUX_HEAT_DEMAND) {
+    ESP_LOGW(TAG, "Unsupported furnace demand command 0x%04X", static_cast<unsigned int>(command));
+    return false;
+  }
+  if (demand_percent < 0 || demand_percent > 100 || duration_minutes < 1 || duration_minutes > 15) {
+    ESP_LOGW(TAG, "Furnace demand requires 0-100 percent and a 1-15 minute refresh duration");
+    return false;
+  }
+  // The demand timer uses its high nibble for minutes; the demand byte is in half-percent units.
+  return queue_control_command_(NodeType::GAS_FURNACE, command,
+                                {static_cast<uint8_t>(duration_minutes << 4),
+                                 static_cast<uint8_t>(demand_percent * 2)});
+}
+
+bool Comfortnet::furnace_set_fan_demand(int32_t mode, int32_t demand_percent, int32_t duration_minutes) {
+  if (mode < 0 || mode > 5 || demand_percent < 0 || demand_percent > 100 || duration_minutes < 1 ||
+      duration_minutes > 15) {
+    ESP_LOGW(TAG, "Fan demand requires mode 0-5, demand 0-100 percent, and duration 1-15 minutes");
+    return false;
+  }
+  return queue_control_command_(NodeType::GAS_FURNACE, CommandType::FAN_DEMAND,
+                                {static_cast<uint8_t>(duration_minutes << 4), static_cast<uint8_t>(mode),
+                                 static_cast<uint8_t>(demand_percent * 2)});
+}
+
 void Comfortnet::setup() {
   if (flow_control_pin_ != nullptr) {
     flow_control_pin_->setup();
   }
   mac_address_.setRandom();
+}
+
+void Comfortnet::reconnect() {
+  ESP_LOGI(TAG, "Reconnect requested; resetting ClimateTalk network session");
+  this->disconnect_();
+  ESP_LOGI(TAG, "Waiting for a network discovery broadcast to rejoin");
 }
 
 void Comfortnet::dump_config() {

@@ -61,6 +61,26 @@ ESPHome-ComfortNet requires ESPHome 2026.11.0 or newer.
 
 For alternative software installation methods and details on how to customize your configuration, check out [the ESPHome-Econet detailed Software Configuration and Installation Guide on their wiki](https://github.com/esphome-econet/esphome-econet/wiki/Initial-ESPHome%E2%80%90econet-Software-Configuration-and-Installation). Please make sure to replace any references to ESPHome-Econet with ESPHome-ComfortNet though!
 
+## ClimateTalk command services
+
+The base package registers the following Home Assistant API services. These are low-level ClimateTalk commands; only call them for equipment that supports the requested function. Setpoints are integer Fahrenheit values. System mode values are `0` = off, `1` = cool, `2` = auto, `3` = heat, and `4` = backup heat. Thermostat fan-key state is `0` = auto or `1` = manual; `demand` is the one-byte value required by the protocol for manual selection.
+
+| Service | Arguments | Purpose |
+| --- | --- | --- |
+| [`thermostat_set_heat_setpoint`](comfortnet_base.yaml:40) | `temperature_f` | Set thermostat heat setpoint (40–100 °F). |
+| [`thermostat_set_cool_setpoint`](comfortnet_base.yaml:45) | `temperature_f` | Set thermostat cool setpoint (40–100 °F). |
+| [`thermostat_set_system_mode`](comfortnet_base.yaml:50) | `mode` | Change thermostat operating mode. |
+| [`thermostat_set_fan_key`](comfortnet_base.yaml:55) | `state`, `demand` | Select automatic or manual thermostat fan operation. |
+| [`thermostat_set_hold_override`](comfortnet_base.yaml:61) | `enabled` | Enable or disable thermostat hold override. |
+| [`furnace_set_heat_demand`](comfortnet_base.yaml:66) | `demand_percent`, `duration_minutes` | Issue furnace heat demand. |
+| [`furnace_set_cool_demand`](comfortnet_base.yaml:74) | `demand_percent`, `duration_minutes` | Issue furnace cool demand. |
+| [`furnace_set_backup_heat_demand`](comfortnet_base.yaml:82) | `demand_percent`, `duration_minutes` | Issue backup-heat demand. |
+| [`furnace_set_defrost_heat_demand`](comfortnet_base.yaml:90) | `demand_percent`, `duration_minutes` | Issue defrost-heat demand. |
+| [`furnace_set_aux_heat_demand`](comfortnet_base.yaml:98) | `demand_percent`, `duration_minutes` | Issue auxiliary-heat demand. |
+| [`furnace_set_fan_demand`](comfortnet_base.yaml:106) | `mode`, `demand_percent`, `duration_minutes` | Issue timed furnace fan demand. |
+
+Demand commands accept 0–100 percent and a 1–15 minute refresh duration. Fan-demand modes are `0` = manual, `1` = cooling, `2` = heating, `3` = auxiliary heat, `4` = emergency heat, and `5` = defrost. Demand commands are temporary requests to the equipment, not substitutes for the thermostat's normal mode/setpoint controls; the equipment may reject unsupported requests.
+
 ## Contributing to ESPHome ComfortNet
 
 Contributions to the ESPHome-comfortnet are welcome and encouraged! If you're looking to help out and need inspiration, please check out [the list of open issues](https://github.com/esphome-comfortnet/esphome-comfortnet/issues).
