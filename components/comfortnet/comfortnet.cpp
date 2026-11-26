@@ -37,6 +37,8 @@ static const uint8_t PACKET_NUMBER_POS =
 static const uint8_t PAYLOAD_LENGTH_POS = 9; /* 0-MAX_PAYLOAD_SIZE */
 
 static const uint8_t CMD_HEADER_SIZE = 2;
+static const uint8_t USER_MENU_REQUEST_SIZE = 6;
+static const uint8_t USER_MENU_CAPTURE_MAX_RETURN_BYTES = 0x20;
 
 // Data indices (Relative to data, not packet)
 static const uint8_t ACK_POS = 0;
@@ -95,8 +97,10 @@ void Comfortnet::log_unknown_furnace_mdi_(MessageType message_type, const uint8_
 
     if (data_len > available) {
       ESP_LOGW(TAG,
-               "Malformed furnace MDI response 0x%02X: DBID=0x%02X declares %u value byte(s), only %u remain; value=%s",
-               static_cast<unsigned int>(message_type), dbid, data_len, static_cast<unsigned int>(available), value_hex);
+               "Malformed furnace MDI response 0x%02X: %s=0x%02X declares %u value byte(s), only %u remain; value=%s",
+               static_cast<unsigned int>(message_type),
+               request_type == MessageType::GET_CONFIGURATION ? "record_id" : "DBID", dbid, data_len,
+               static_cast<unsigned int>(available), value_hex);
       return;
     }
 
@@ -214,17 +218,18 @@ void Comfortnet::log_unknown_furnace_mdi_(MessageType message_type, const uint8_
     }
 
     if (!known_item) {
-      ESP_LOGI(TAG, "Unknown furnace %s DBID=0x%02X len=%u value=%s",
+      ESP_LOGI(TAG, "Unknown furnace %s %s=0x%02X len=%u value=%s",
                request_type == MessageType::GET_CONFIGURATION ? "configuration" :
                request_type == MessageType::GET_STATUS ? "status" : "sensor",
-               dbid, data_len, value_hex);
+               request_type == MessageType::GET_CONFIGURATION ? "record_id" : "DBID", dbid, data_len, value_hex);
     } else if (data_len != expected_length) {
-      ESP_LOGI(TAG, "Unexpected furnace %s DBID=0x%02X length=%u (known length=%d) value=%s",
+      ESP_LOGI(TAG, "Unexpected furnace %s %s=0x%02X length=%u (known length=%d) value=%s",
                request_type == MessageType::GET_CONFIGURATION ? "configuration" :
                request_type == MessageType::GET_STATUS ? "status" : "sensor",
-               dbid, data_len, expected_length, value_hex);
+               request_type == MessageType::GET_CONFIGURATION ? "record_id" : "DBID", dbid, data_len,
+               expected_length, value_hex);
     } else if (!known_value) {
-      ESP_LOGI(TAG, "Unknown furnace configuration DBID=0x%02X value=%s", dbid, value_hex);
+      ESP_LOGI(TAG, "Unknown furnace configuration record_id=0x%02X value=%s", dbid, value_hex);
     }
     offset += data_len;
   }
@@ -466,11 +471,53 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
       message_type == MessageType::GET_CONFIGURATION_RESPONSE) {
     ESP_LOGI(TAG,
              "GETCFG capture dir=%s src=0x%02X dst=0x%02X subnet=0x%02X method=0x%02X param1=0x%02X "
-             "param2=0x%02X node_type=0x%02X msg=0x%02X packet=0x%02X len=%u payload=%s",
+             "param2=0x%02X node_type=0x%02X msg=0x%02X packet=0x%02X len=%u crc=0x%04X payload=%s",
              is_tx ? "TX" : "RX", static_cast<unsigned int>(src_adr), static_cast<unsigned int>(dst_adr),
              static_cast<unsigned int>(subnet), static_cast<unsigned int>(send_method), send_param_1, send_param_2,
              static_cast<unsigned int>(source_node_type), static_cast<unsigned int>(message_type), packet_number,
-             payload_len, payload_hex);
+             payload_len, crc, payload_hex);
+    if (!is_tx && message_type == MessageType::GET_CONFIGURATION_RESPONSE) {
+      if (payload_len < 2) {
+        ESP_LOGW(TAG, "GETCFG response too short for record header: len=%u payload=%s", payload_len, payload_hex);
+      } else {
+        const uint8_t record_id = payload[0];
+        const uint8_t value_len = payload[1];
+        const uint16_t actual_value_len = payload_len - 2;
+        if (actual_value_len != value_len) {
+          ESP_LOGW(TAG, "GETCFG record length mismatch: record_id=0x%02X declared=%u actual=%u", record_id,
+                   value_len, static_cast<unsigned int>(actual_value_len));
+        } else {
+          char value_hex[3 * MAX_PAYLOAD_SIZE + 1];
+          esphome::format_hex_pretty_to(value_hex, sizeof(value_hex), payload + 2, value_len, '.');
+          ESP_LOGI(TAG, "GETCFG record: record_id=0x%02X value_length=%u value=%s", record_id, value_len,
+                   value_hex);
+        }
+      }
+    }
+  }
+  if (!is_tx && message_type == MessageType::GET_USER_MENU_RESPONSE) {
+    if (payload_len < USER_MENU_REQUEST_SIZE) {
+      ESP_LOGW(TAG, "GET_USER_MENU response too short for six-byte header: len=%u payload=%s", payload_len,
+               payload_hex);
+    } else {
+      const uint16_t fetch_offset = static_cast<uint16_t>(payload[3]) |
+                                    (static_cast<uint16_t>(payload[4]) << 8);
+      const uint8_t menu_data_len = payload_len - USER_MENU_REQUEST_SIZE;
+      if (menu_data_len > 0) {
+        char menu_data_hex[3 * MAX_PAYLOAD_SIZE + 1];
+        esphome::format_hex_pretty_to(menu_data_hex, sizeof(menu_data_hex), payload + USER_MENU_REQUEST_SIZE,
+                                      menu_data_len, '.');
+        ESP_LOGI(TAG,
+                 "GET_USER_MENU response menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X "
+                 "max_return=%u menu_data_len=%u menu_data=%s",
+                 payload[0], payload[1], payload[2], fetch_offset, payload[5], menu_data_len, menu_data_hex);
+      } else {
+        ESP_LOGI(TAG,
+                 "GET_USER_MENU response menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X "
+                 "max_return=%u menu_data_len=0",
+                 payload[0], payload[1], payload[2], fetch_offset, payload[5]);
+      }
+    }
   }
   if (is_tx) {
     if (this->direct_poll_command_waiting_tx_) {
@@ -659,6 +706,18 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
           } else if (message_type == PACKET_RESPONSE(pending_messages_.front().packet_type) &&
                      send_param_1 == pending_messages_.front().send_param_1) {
             should_ack = MessageAckAction::ACK;
+            if (pending_messages_.front().packet_type == MessageType::GET_USER_MENU &&
+                message_type == MessageType::GET_USER_MENU_RESPONSE) {
+              const auto &request = pending_messages_.front().payload;
+              if (request.size() == USER_MENU_REQUEST_SIZE) {
+                const uint16_t fetch_offset = static_cast<uint16_t>(request[3]) |
+                                              (static_cast<uint16_t>(request[4]) << 8);
+                ESP_LOGI(TAG,
+                         "Matched GET_USER_MENU response to request menu_file=0x%02X main=0x%02X sub=0x%02X "
+                         "offset=0x%04X max_return=%u",
+                         request[0], request[1], request[2], fetch_offset, request[5]);
+              }
+            }
             if (poll_request_pending_ && pending_messages_.front().packet_type == pending_poll_message_ &&
                 pending_messages_.front().send_method == SendMethod::NODE_TYPE &&
                 pending_messages_.front().send_param_1 == static_cast<uint8_t>(pending_poll_node_type_)) {
@@ -787,6 +846,17 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
         ESP_LOGI(TAG, "Joined network as address: 0x%02X", static_cast<unsigned int>(this->node_id_));
         call_listener_(DATA_KEY_NETWORK_STATUS,
                        (struct ComfortnetData) {this->device_type_, ComfortnetData::DataType::BOOLEAN, true});
+        if (!this->user_menu_capture_started_) {
+          this->user_menu_capture_started_ = true;
+          std::vector<uint8_t> menu_request{0x00, 0x00, 0x00, 0x00, 0x00,
+                                           USER_MENU_CAPTURE_MAX_RETURN_BYTES};
+          queue_message(PendingMessageToType(NodeType::GAS_FURNACE, MessageType::GET_USER_MENU,
+                                             std::move(menu_request)));
+          ESP_LOGI(TAG,
+                   "Queued one-time GET_USER_MENU read-only capture (0x41): menu_file=0 main=0 sub=0 "
+                   "offset=0 max_return=%u",
+                   USER_MENU_CAPTURE_MAX_RETURN_BYTES);
+        }
       } else if (start_id != this->node_id_) {
         ESP_LOGI(TAG, "Network address reassigned: 0x%02X (Old: 0x%02X)", static_cast<unsigned int>(this->node_id_),
                  static_cast<unsigned int>(start_id));
@@ -969,6 +1039,7 @@ void Comfortnet::disconnect_() {
   direct_poll_mode_ = false;
   direct_poll_command_waiting_tx_ = false;
   direct_poll_command_waiting_response_ = false;
+  user_menu_capture_started_ = false;
   direct_poll_command_tx_time_ = 0;
   awaiting_discovery_ = false;
   has_won_token_broadcast_ = false;
