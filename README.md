@@ -57,6 +57,8 @@ This has been built primarily with ESP-IDF in mind, however it will also run on 
 
 ## Software Installation
 
+ESPHome-ComfortNet requires ESPHome 2026.11.0 or newer.
+
 For alternative software installation methods and details on how to customize your configuration, check out [the ESPHome-Econet detailed Software Configuration and Installation Guide on their wiki](https://github.com/esphome-econet/esphome-econet/wiki/Initial-ESPHome%E2%80%90econet-Software-Configuration-and-Installation). Please make sure to replace any references to ESPHome-Econet with ESPHome-ComfortNet though!
 
 ## Contributing to ESPHome ComfortNet
@@ -74,6 +76,8 @@ pre-commit install  # Enable pre-commit hooks to run prior to any commit
 ### Testing Local Changes
 
 The esphome CLI can be used to compile and install changes to YAML and/or code via the `esphome config|compile|run` commands. The provided `example-local.yaml` file provides a simple example of how to build with all local changes like this; just add a `secrets.yaml` file to the root of your checked-out repo and run `esphome compile example-local.yaml` to test compilation of your configuration and code changes. You can use the `esphome config example-local.yaml` command to see the results of any config updates, or the `esphome run example-local.yaml` command to deploy your changes to an ESPHome-capable device over Wi-Fi or USB.
+
+When using a remote external component, ESPHome may continue using its cached checkout for up to a day. If a build still reports the removed `format_hex_pretty` helper, force an external-component refresh (set its `refresh` option to `always`) or compile the local checkout with `example-local.yaml`.
 
 ## License
 

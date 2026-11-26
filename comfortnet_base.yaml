@@ -17,7 +17,7 @@ esphome:
   name: ${name}
   friendly_name: ${friendly_name}
   comment: ${device_description}
-  min_version: "2024.11.0"
+  min_version: "2026.11.0"
   project:
     name: "esphome-comfortnet.esphome-comfortnet"
     version: v1.0.0
