@@ -318,6 +318,7 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
   bool direct_poll_mode_{false};                                // Fallback mode after prolonged R2R silence
   bool direct_poll_command_waiting_tx_{false};
   bool direct_poll_command_waiting_response_{false};
+  bool user_menu_scan_started_{false};
   uint32_t direct_poll_command_tx_time_{0};
   QueuedMessageType message_queued_{QueuedMessageType::NONE};  // Whether we should arbitrate, or are sending normally
   bool awaiting_discovery_;                                    // Whether we are in the discovery process
