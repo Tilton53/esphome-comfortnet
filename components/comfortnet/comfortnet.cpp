@@ -53,6 +53,18 @@ static const uint8_t ADDRESS_MAC_POS = 2;
 
 // ComfortnetData keys for listeners
 static const std::string DATA_KEY_NETWORK_STATUS = "NETWORK_STATUS";
+static const std::string DATA_KEY_PENDING_MESSAGE_COUNT = "PENDING_MESSAGE_COUNT";
+
+void Comfortnet::queue_message(PendingMessage message) {
+  pending_messages_.push(std::move(message));
+  publish_pending_message_count_();
+}
+
+void Comfortnet::publish_pending_message_count_() {
+  call_listener_(DATA_KEY_PENDING_MESSAGE_COUNT,
+                 (struct ComfortnetData) {device_type_, ComfortnetData::DataType::FLOAT,
+                                          static_cast<float>(pending_messages_.size())});
+}
 
 bool Comfortnet::queue_control_command_(NodeType target_type, CommandType command,
                                         const std::vector<uint8_t> &command_data) {
@@ -72,8 +84,14 @@ bool Comfortnet::queue_control_command_(NodeType target_type, CommandType comman
   payload.push_back(static_cast<uint8_t>((command_id >> 8) & 0xFF));
   payload.insert(payload.end(), command_data.begin(), command_data.end());
   queue_message(PendingMessageToType(target_type, MessageType::SET_CONTROL_COMMAND, std::move(payload)));
-  ESP_LOGI(TAG, "Queued control command 0x%04X for node type 0x%02X", command_id,
-           static_cast<unsigned int>(target_type));
+  const PendingMessage &queued = pending_messages_.back();
+  char payload_hex[3 * MAX_PAYLOAD_SIZE + 1];
+  esphome::format_hex_pretty_to(payload_hex, sizeof(payload_hex), queued.payload.data(), queued.payload.size(), '.');
+  ESP_LOGI(TAG,
+           "Queued command=0x%04X target_type=0x%02X msg=0x%02X method=0x%02X route=0x%02X queue_depth=%u payload=%s",
+           command_id, static_cast<unsigned int>(target_type), static_cast<unsigned int>(queued.packet_type),
+           static_cast<unsigned int>(queued.send_method), queued.send_param_1,
+           static_cast<unsigned int>(pending_messages_.size()), payload_hex);
   return true;
 }
 
@@ -362,12 +380,16 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
                 dev.poll_message,
                 payload,
             });
+            publish_pending_message_count_();
           }
         }
         if (!this->r2r_reply_.empty()) {
           /**
            * We previously received a packet that this R2R is confirming
            */
+          ESP_LOGI(TAG, "R2R slot: sending deferred response 0x%02X before pending queue (depth=%u)",
+                   r2r_reply_.size() > MESSAGE_TYPE_POS ? r2r_reply_[MESSAGE_TYPE_POS] : 0,
+                   static_cast<unsigned int>(pending_messages_.size()));
           tx_message_.clear();
           tx_message_.insert(tx_message_.end(), r2r_reply_.begin(), r2r_reply_.end());
           r2r_reply_.clear();
@@ -377,6 +399,16 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
            * We have packets we need to send, send them!
            */
           PendingMessage msg = pending_messages_.front();
+          uint16_t command_id = 0;
+          if (msg.packet_type == MessageType::SET_CONTROL_COMMAND && msg.payload.size() >= CMD_HEADER_SIZE) {
+            command_id = static_cast<uint16_t>(msg.payload[0] | (msg.payload[1] << 8));
+          }
+          char payload_hex[3 * MAX_PAYLOAD_SIZE + 1];
+          esphome::format_hex_pretty_to(payload_hex, sizeof(payload_hex), msg.payload.data(), msg.payload.size(), '.');
+          ESP_LOGI(TAG,
+                   "R2R slot: sending queue front msg=0x%02X command=0x%04X method=0x%02X route=0x%02X queue_depth=%u payload=%s",
+                   static_cast<unsigned int>(msg.packet_type), command_id, static_cast<unsigned int>(msg.send_method),
+                   msg.send_param_1, static_cast<unsigned int>(pending_messages_.size()), payload_hex);
           return_payload.insert(return_payload.end(), msg.payload.begin(), msg.payload.end());
           transmit_message_(src_adr, this->node_id_, this->subnet_, msg.send_method, msg.send_param_1, 0,
                             this->device_type_, msg.packet_type,
@@ -410,7 +442,12 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
           } else if (message_type == PACKET_RESPONSE(pending_messages_.front().packet_type) &&
                      send_param_1 == pending_messages_.front().send_param_1) {
             should_ack = MessageAckAction::ACK;
+            ESP_LOGI(TAG, "Received response 0x%02X for queued request 0x%02X route=0x%02X; queue_depth=%u",
+                     static_cast<unsigned int>(message_type),
+                     static_cast<unsigned int>(pending_messages_.front().packet_type), send_param_1,
+                     static_cast<unsigned int>(pending_messages_.size()));
             pending_messages_.pop();
+            publish_pending_message_count_();
           }
         }
         if (should_ack == MessageAckAction::UNKNOWN && message_type == MessageType::GET_NODE_ID) {
@@ -422,6 +459,9 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
                                    this->device_type_, PACKET_RESPONSE(message_type),
                                    PACKET_NUMBER(false, this->subnet_ == Subnet::VERSION_1), return_payload.data(),
                                    return_payload.size(), false, false);
+          ESP_LOGD(TAG, "Deferred response 0x%02X queued for GET_NODE_ID; pending queue depth=%u",
+                   static_cast<unsigned int>(PACKET_RESPONSE(message_type)),
+                   static_cast<unsigned int>(pending_messages_.size()));
         } else if (should_ack == MessageAckAction::UNKNOWN && message_type == MessageType::GET_NODE_ID_RESPONSE) {
           should_ack = MessageAckAction::ACK;
         } else if (should_ack == MessageAckAction::UNKNOWN &&

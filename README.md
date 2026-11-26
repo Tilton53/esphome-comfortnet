@@ -81,6 +81,8 @@ The base package registers the following Home Assistant API services. These are 
 
 Demand commands accept 0–100 percent and a 1–15 minute refresh duration. Fan-demand modes are `0` = manual, `1` = cooling, `2` = heating, `3` = auxiliary heat, `4` = emergency heat, and `5` = defrost. Demand commands are temporary requests to the equipment, not substitutes for the thermostat's normal mode/setpoint controls; the equipment may reject unsupported requests.
 
+The `ComfortNet Queued Messages` diagnostic sensor reports the pending request queue depth. It includes a request that has been transmitted but is still awaiting its protocol response; it does not include scheduled polls that have not yet entered the pending queue.
+
 ## Contributing to ESPHome ComfortNet
 
 Contributions to the ESPHome-comfortnet are welcome and encouraged! If you're looking to help out and need inspiration, please check out [the list of open issues](https://github.com/esphome-comfortnet/esphome-comfortnet/issues).

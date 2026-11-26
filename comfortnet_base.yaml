@@ -138,6 +138,14 @@ sensor:
     name: "WiFi Signal Strength"
     id: wifi_signal_sensor
     entity_category: "diagnostic"
+  - platform: comfortnet
+    name: "ComfortNet Queued Messages"
+    id: comfortnet_queued_messages
+    data_key: "PENDING_MESSAGE_COUNT"
+    unit_of_measurement: "messages"
+    accuracy_decimals: 0
+    icon: "mdi:counter"
+    entity_category: "diagnostic"
 binary_sensor:
   - platform: comfortnet
     name: "ComfortNet Network Status"

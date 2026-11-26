@@ -214,7 +214,8 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
     }
   };
 
-  inline void queue_message(PendingMessage message) { pending_messages_.push(message); };
+  void queue_message(PendingMessage message);
+  uint32_t pending_message_count() const { return static_cast<uint32_t>(pending_messages_.size()); }
 
   // ClimateTalk control-command helpers exposed through Home Assistant API services.
   bool thermostat_set_heat_setpoint(int32_t temperature_f);
@@ -227,6 +228,7 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
 
  protected:
   uint32_t update_interval_millis_{30000};
+  void publish_pending_message_count_();
   bool queue_control_command_(NodeType target_type, CommandType command, const std::vector<uint8_t> &command_data);
   void read_buffer_(int bytes_available, uint32_t now);
   void handle_message_(bool is_tx, uint32_t now);

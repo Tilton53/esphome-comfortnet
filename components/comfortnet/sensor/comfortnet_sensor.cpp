@@ -18,6 +18,9 @@ void ComfortnetSensor::setup() {
         }
       }
     });
+  if (this->sensor_key_ == "PENDING_MESSAGE_COUNT") {
+    this->publish_state(static_cast<float>(this->parent_->pending_message_count()));
+  }
 }
 
 void ComfortnetSensor::dump_config() {
