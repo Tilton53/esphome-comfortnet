@@ -2,6 +2,7 @@
 #ifndef ARDUINO
 #include "esp_timer.h"
 #endif
+#include "esphome/core/helpers.h"
 
 namespace comfortnet {
 
@@ -139,7 +140,10 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
       TAG,
       "%s  | 0x%02X | 0x%02X | 0x%02X   | 0x%02X | 0x%04X | 0x%02X    | 0x%02X    | 0x%02X   | %-3u | 0x%04X   | %s",
       is_tx ? "TX" : "RX", dst_adr, src_adr, subnet, send_method, (send_param_1 << 8) | send_param_2, source_node_type,
-      message_type, packet_number, payload_len, crc, esphome::format_hex_pretty(payload, payload_len).c_str());
+      char payload_hex[3 * 255];
+      esphome::format_hex_pretty_to(payload_hex, sizeof(payload_hex), payload, payload_len, '.');
+        
+      message_type, packet_number, payload_len, crc, payload_hex);
   if (is_tx) {
     if (message_type == MessageType::TOKEN_OFFER_RESPONSE) {
       // Most likely we won the token offer broadcast
@@ -434,7 +438,9 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
     const uint8_t *cmd_payload = payload + CONTROL_CMD_SIZE;
     uint8_t cmd_payload_len = payload_len - CONTROL_CMD_SIZE;
     ESP_LOGD(TAG, "Command | Payload HEX");
-    ESP_LOGD(TAG, "0x%04X  | %s", command_type, esphome::format_hex_pretty(cmd_payload, cmd_payload_len).c_str());
+    char cmd_payload_hex[3 * 255];
+    esphome::format_hex_pretty_to(cmd_payload_hex, sizeof(cmd_payload_hex), cmd_payload, cmd_payload_len, '.');
+    ESP_LOGD(TAG, "0x%04X  | %s", command_type, cmd_payload_hex);
     call_command_listener_((struct ComfortnetCommandData) {
         message_type == MessageType::SET_CONTROL_COMMAND ? get_node_type_(dst_adr) : source_node_type,
         get_node_mac_(message_type == MessageType::SET_CONTROL_COMMAND ? dst_adr : src_adr), command_type,
