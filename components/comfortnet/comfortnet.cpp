@@ -96,6 +96,31 @@ bool Comfortnet::queue_control_command_(NodeType target_type, CommandType comman
   return true;
 }
 
+bool Comfortnet::queue_next_poll_(uint32_t now, bool allow_queued_messages) {
+  if (!polling_due_ || poll_request_pending_ || (!allow_queued_messages && !pending_messages_.empty()) ||
+      polling_queue_.empty()) {
+    return false;
+  }
+
+  const PollQueueEntry &dev = polling_queue_.front();
+  if (dev.poll_message != MessageType::GET_STATUS && dev.poll_message != MessageType::GET_SENSOR_DATA &&
+      dev.poll_message != MessageType::GET_IDENTIFICATION && dev.poll_message != MessageType::GET_CONFIGURATION) {
+    ESP_LOGW(TAG, "Unable to handle poll request for message type 0x%02X to node type 0x%02X",
+             static_cast<unsigned int>(dev.poll_message), static_cast<unsigned int>(dev.node_type));
+    polling_queue_.erase(polling_queue_.begin());
+    return false;
+  }
+
+  pending_messages_.push((struct PendingMessageToType) {dev.node_type, dev.poll_message, {}});
+  polling_due_ = false;
+  poll_request_pending_ = true;
+  pending_poll_message_ = dev.poll_message;
+  pending_poll_node_type_ = dev.node_type;
+  last_poll_enqueue_time_ = now;
+  publish_pending_message_count_();
+  return true;
+}
+
 bool Comfortnet::thermostat_set_heat_setpoint(int32_t temperature_f) {
   if (temperature_f < 40 || temperature_f > 100) {
     ESP_LOGW(TAG, "Heat setpoint must be between 40 and 100 degrees Fahrenheit");
@@ -401,30 +426,7 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
         this->last_r2r_time_ = now;
         this->direct_poll_mode_ = false;
         this->direct_poll_command_waiting_response_ = false;
-        if (pending_messages_.size() == 0 && polling_queue_.size() > 0) {
-          // If we have no commands to send, queue up a request to poll a device's status
-          PollQueueEntry dev = polling_queue_.front();
-          std::vector<uint8_t> payload;
-          bool can_reply = true;
-          if (dev.poll_message == MessageType::GET_STATUS || dev.poll_message == MessageType::GET_SENSOR_DATA ||
-              dev.poll_message == MessageType::GET_IDENTIFICATION ||
-              dev.poll_message == MessageType::GET_CONFIGURATION) {
-            // Empty payload
-          } else {
-            ESP_LOGW(TAG, "Unable to handle poll request for message type 0x%02X to node type 0x%02X",
-                     static_cast<unsigned int>(dev.poll_message), static_cast<unsigned int>(dev.node_type));
-            polling_queue_.erase(polling_queue_.begin());
-            can_reply = false;
-          }
-          if (can_reply) {
-            pending_messages_.push((struct PendingMessageToType) {
-                dev.node_type,
-                dev.poll_message,
-                payload,
-            });
-            publish_pending_message_count_();
-          }
-        }
+        queue_next_poll_(now);
         if (!this->r2r_reply_.empty()) {
           /**
            * We previously received a packet that this R2R is confirming
@@ -484,6 +486,11 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
           } else if (message_type == PACKET_RESPONSE(pending_messages_.front().packet_type) &&
                      send_param_1 == pending_messages_.front().send_param_1) {
             should_ack = MessageAckAction::ACK;
+            if (poll_request_pending_ && pending_messages_.front().packet_type == pending_poll_message_ &&
+                pending_messages_.front().send_method == SendMethod::NODE_TYPE &&
+                pending_messages_.front().send_param_1 == static_cast<uint8_t>(pending_poll_node_type_)) {
+              poll_request_pending_ = false;
+            }
             ESP_LOGI(TAG, "Received response 0x%02X for queued request 0x%02X route=0x%02X; queue_depth=%u",
                      static_cast<unsigned int>(message_type),
                      static_cast<unsigned int>(pending_messages_.front().packet_type), send_param_1,
@@ -706,12 +713,20 @@ void Comfortnet::loop() {
 #else
   const uint32_t now = (uint32_t) (esp_timer_get_time() / 1000);
 #endif
-  if (node_id_ != static_cast<NodeAddress>(0) && !this->direct_poll_mode_ && pending_messages_.size() > 0 &&
+  if (!polling_due_ && update_interval_millis_ > 0 &&
+      now - last_poll_enqueue_time_ >= update_interval_millis_) {
+    polling_due_ = true;
+  }
+  if (node_id_ != static_cast<NodeAddress>(0) && !this->direct_poll_mode_ &&
+      (pending_messages_.size() > 0 || (polling_due_ && !polling_queue_.empty())) &&
       now - this->last_r2r_time_ >= R2R_FALLBACK_TIMEOUT) {
     this->direct_poll_mode_ = true;
     ESP_LOGW(TAG, "No R2R for %u ms with %u queued message(s); enabling direct-poll fallback",
              static_cast<unsigned int>(now - this->last_r2r_time_),
              static_cast<unsigned int>(pending_messages_.size()));
+  }
+  if (this->direct_poll_mode_) {
+    queue_next_poll_(now, true);
   }
   if (this->direct_poll_command_waiting_response_ &&
       now - this->direct_poll_command_tx_time_ >= REQUEST_TIMEOUT) {
@@ -781,6 +796,8 @@ void Comfortnet::disconnect_() {
   direct_poll_command_tx_time_ = 0;
   awaiting_discovery_ = false;
   has_won_token_broadcast_ = false;
+  polling_due_ = true;
+  last_poll_enqueue_time_ = 0;
 
   node_id_ = static_cast<NodeAddress>(0);
   subnet_ = Subnet::BROADCAST;

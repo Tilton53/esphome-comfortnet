@@ -64,6 +64,12 @@ comfortnet:
                 id(furnace_dehumidification_actual).publish_state(datagram.data[21] / 2.0f);
               }
             }
+    - packet_type: 0x81 # Configuration data
+      target_device_type: 0x02
+      register_polling: true
+      then:
+        - lambda: |-
+            client->device_poll_to_end(data.node_type, data.packet_type_request);
     - packet_type: 0x87 # Sensor data
       target_device_type: 0x02
       register_polling: true

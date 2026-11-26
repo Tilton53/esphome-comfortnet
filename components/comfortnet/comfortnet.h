@@ -193,6 +193,7 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
     if (it != polling_queue_.end()) {
       if (it.base()->poll_once) {
         polling_queue_.erase(it);
+        return;
       }
       std::rotate(it, it + 1, polling_queue_.end());
     }
@@ -228,6 +229,12 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
 
  protected:
   uint32_t update_interval_millis_{30000};
+  uint32_t last_poll_enqueue_time_{0};
+  bool polling_due_{true};
+  bool poll_request_pending_{false};
+  MessageType pending_poll_message_{MessageType::GET_STATUS};
+  NodeType pending_poll_node_type_{NodeType::ANY};
+  bool queue_next_poll_(uint32_t now, bool allow_queued_messages = false);
   void publish_pending_message_count_();
   bool queue_control_command_(NodeType target_type, CommandType command, const std::vector<uint8_t> &command_data);
   void read_buffer_(int bytes_available, uint32_t now);
