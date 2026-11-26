@@ -236,6 +236,7 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
   NodeType pending_poll_node_type_{NodeType::ANY};
   bool queue_next_poll_(uint32_t now, bool allow_queued_messages = false);
   void publish_pending_message_count_();
+  void log_unknown_furnace_mdi_(MessageType message_type, const uint8_t *payload, uint8_t payload_len);
   bool queue_control_command_(NodeType target_type, CommandType command, const std::vector<uint8_t> &command_data);
   void read_buffer_(int bytes_available, uint32_t now);
   void handle_message_(bool is_tx, uint32_t now);

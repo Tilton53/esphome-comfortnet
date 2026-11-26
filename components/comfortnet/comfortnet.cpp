@@ -67,6 +67,169 @@ void Comfortnet::publish_pending_message_count_() {
                                           static_cast<float>(pending_messages_.size())});
 }
 
+void Comfortnet::log_unknown_furnace_mdi_(MessageType message_type, const uint8_t *payload, uint8_t payload_len) {
+  const MessageType request_type = PACKET_REQUEST(message_type);
+  if (request_type != MessageType::GET_CONFIGURATION && request_type != MessageType::GET_STATUS &&
+      request_type != MessageType::GET_SENSOR_DATA) {
+    return;
+  }
+
+  uint16_t offset = 0;
+  while (offset < payload_len) {
+    const uint16_t remaining = payload_len - offset;
+    if (remaining < 2) {
+      char trailing_hex[3 * MAX_PAYLOAD_SIZE + 1];
+      esphome::format_hex_pretty_to(trailing_hex, sizeof(trailing_hex), payload + offset, remaining, '.');
+      ESP_LOGW(TAG, "Furnace MDI response 0x%02X has %u trailing byte(s) without a DBID/length: %s",
+               static_cast<unsigned int>(message_type), static_cast<unsigned int>(remaining), trailing_hex);
+      return;
+    }
+
+    const uint8_t dbid = payload[offset++];
+    const uint8_t data_len = payload[offset++];
+    const uint16_t available = payload_len - offset;
+    const uint8_t *item_data = payload + offset;
+    char value_hex[3 * MAX_PAYLOAD_SIZE + 1];
+    const uint8_t value_len = static_cast<uint8_t>(std::min<uint16_t>(data_len, available));
+    esphome::format_hex_pretty_to(value_hex, sizeof(value_hex), item_data, value_len, '.');
+
+    if (data_len > available) {
+      ESP_LOGW(TAG,
+               "Malformed furnace MDI response 0x%02X: DBID=0x%02X declares %u value byte(s), only %u remain; value=%s",
+               static_cast<unsigned int>(message_type), dbid, data_len, static_cast<unsigned int>(available), value_hex);
+      return;
+    }
+
+    bool known_item = false;
+    int expected_length = -1;
+    bool known_value = true;
+    if (request_type == MessageType::GET_CONFIGURATION) {
+      switch (dbid) {
+        case 0x01:
+        case 0x02:
+        case 0x03:
+        case 0x04:
+        case 0x06:
+        case 0x09:
+        case 0x0A:
+        case 0x0B:
+        case 0x0C:
+        case 0x0D:
+        case 0x0E:
+        case 0x0F:
+        case 0x10:
+        case 0x11:
+        case 0x12:
+        case 0x18:
+          known_item = true;
+          expected_length = 1;
+          break;
+        case 0x07:
+        case 0x08:
+        case 0x14:
+          known_item = true;
+          expected_length = 2;
+          break;
+        default:
+          break;
+      }
+      if (known_item && data_len == expected_length) {
+        switch (dbid) {
+          case 0x02:
+            known_value = item_data[0] == 1 || item_data[0] == 2 || item_data[0] == 100;
+            break;
+          case 0x03:
+            known_value = item_data[0] == 1 || item_data[0] == 2;
+            break;
+          case 0x04:
+            known_value = item_data[0] <= 3;
+            break;
+          case 0x06:
+            known_value = item_data[0] <= 2;
+            break;
+          case 0x09:
+            known_value = item_data[0] <= 3;
+            break;
+          case 0x0A:
+          case 0x0B: {
+            const int8_t trim = static_cast<int8_t>(item_data[0]);
+            known_value = trim >= -15 && trim <= 15 && trim % 5 == 0;
+            break;
+          }
+          case 0x11:
+            known_value = item_data[0] <= 1;
+            break;
+          case 0x12:
+            known_value = item_data[0] <= 2;
+            break;
+          case 0x10:
+            known_value = item_data[0] >= 25 && item_data[0] <= 100;
+            break;
+          default:
+            break;
+        }
+      }
+    } else {
+      if (request_type == MessageType::GET_STATUS && dbid == 0x00) {
+        // The standard furnace status block contains 22 bytes of positional status items.
+        known_item = true;
+        expected_length = 22;
+      } else {
+        switch (dbid) {
+          case 0x00:  // Existing furnace sensor MDI uses zero-based return-air/supply-air IDs.
+          case 0x01:
+          case 0x02:
+          case 0x03:
+          case 0x04:
+          case 0x05:
+          case 0x0A:
+          case 0x0B:
+          case 0x0C:
+          case 0x0D:
+          case 0x0E:
+          case 0x0F:
+          case 0x10:
+          case 0x15:
+          case 0x16:
+            known_item = true;
+            expected_length = 2;
+            break;
+          case 0x12:
+          case 0x20:
+          case 0x21:
+            known_item = true;
+            expected_length = 1;
+            break;
+          default:
+            break;
+        }
+        if (request_type == MessageType::GET_SENSOR_DATA && known_item && data_len == expected_length) {
+          if (dbid == 0x20) {
+            known_value = item_data[0] <= 0x03;
+          } else if (dbid == 0x21) {
+            known_value = (item_data[0] & 0xFC) == 0;
+          }
+        }
+      }
+    }
+
+    if (!known_item) {
+      ESP_LOGI(TAG, "Unknown furnace %s DBID=0x%02X len=%u value=%s",
+               request_type == MessageType::GET_CONFIGURATION ? "configuration" :
+               request_type == MessageType::GET_STATUS ? "status" : "sensor",
+               dbid, data_len, value_hex);
+    } else if (data_len != expected_length) {
+      ESP_LOGI(TAG, "Unexpected furnace %s DBID=0x%02X length=%u (known length=%d) value=%s",
+               request_type == MessageType::GET_CONFIGURATION ? "configuration" :
+               request_type == MessageType::GET_STATUS ? "status" : "sensor",
+               dbid, data_len, expected_length, value_hex);
+    } else if (!known_value) {
+      ESP_LOGI(TAG, "Unknown furnace configuration DBID=0x%02X value=%s", dbid, value_hex);
+    }
+    offset += data_len;
+  }
+}
+
 bool Comfortnet::queue_control_command_(NodeType target_type, CommandType command,
                                         const std::vector<uint8_t> &command_data) {
   if (node_id_ == static_cast<NodeAddress>(0)) {
@@ -649,6 +812,9 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
                                                     message_type == MessageType::GET_SENSOR_DATA_RESPONSE ||
                                                     message_type == MessageType::GET_CONFIGURATION_RESPONSE ||
                                                     message_type == MessageType::GET_IDENTIFICATION_RESPONSE)) {
+    if (source_node_type == NodeType::GAS_FURNACE) {
+      log_unknown_furnace_mdi_(message_type, payload, payload_len);
+    }
     call_packet_listener_(
         (struct ComfortnetPacketData) {source_node_type, get_node_mac_(src_adr), message_type, payload, payload_len});
   }
