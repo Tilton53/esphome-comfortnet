@@ -183,7 +183,6 @@ number:
     max_value: 255
     step: 1
     mode: box
-    update_interval: 1s
     lambda: return id(user_menu_file_value);
     set_action:
       - lambda: id(user_menu_file_value) = static_cast<uint8_t>(x);
@@ -195,7 +194,6 @@ number:
     max_value: 255
     step: 1
     mode: box
-    update_interval: 1s
     lambda: return id(user_menu_main_value);
     set_action:
       - lambda: id(user_menu_main_value) = static_cast<uint8_t>(x);
@@ -207,7 +205,6 @@ number:
     max_value: 255
     step: 1
     mode: box
-    update_interval: 1s
     lambda: return id(user_menu_sub_value);
     set_action:
       - lambda: id(user_menu_sub_value) = static_cast<uint8_t>(x);
@@ -219,7 +216,6 @@ number:
     max_value: 65535
     step: 1
     mode: box
-    update_interval: 1s
     lambda: return id(user_menu_offset_value);
     set_action:
       - lambda: id(user_menu_offset_value) = static_cast<uint32_t>(x);
@@ -231,7 +227,6 @@ number:
     max_value: 234
     step: 1
     mode: box
-    update_interval: 1s
     lambda: return id(user_menu_max_return_value);
     set_action:
       - lambda: id(user_menu_max_return_value) = static_cast<uint8_t>(x);
@@ -256,17 +251,11 @@ binary_sensor:
     device_class: connectivity
     data_key: "NETWORK_STATUS"
 text_sensor:
-  - platform: template
+  - platform: comfortnet
     name: "ComfortNet User Menu Response"
     id: user_menu_response
-    update_interval: 1s
+    data_key: "USER_MENU_RESPONSE"
     entity_category: diagnostic
-    lambda: |-
-      const auto &response = id(comfortnet_id).last_user_menu_response();
-      if (response.empty()) {
-        return {};
-      }
-      return response;
 button:
   - platform: template
     name: "Reconnect to ComfortNet"
@@ -301,6 +290,86 @@ button:
           id(comfortnet_id).get_user_menu(
               id(user_menu_file_value), id(user_menu_main_value), id(user_menu_sub_value),
               static_cast<uint16_t>(id(user_menu_offset_value)), id(user_menu_max_return_value));
+  - platform: template
+    name: "User Menu Up"
+    id: comfortnet_user_menu_up
+    icon: "mdi:arrow-up"
+    entity_category: "diagnostic"
+    on_press:
+      - lambda: |-
+          if (id(user_menu_main_value) > 0) {
+            id(user_menu_main_value)--;
+            id(user_menu_main).publish_state(id(user_menu_main_value));
+            id(user_menu_sub_value) = 0;
+            id(user_menu_sub).publish_state(0);
+            id(user_menu_offset_value) = 0;
+            id(user_menu_offset).publish_state(0);
+          }
+          id(comfortnet_id).get_user_menu(
+              id(user_menu_file_value), id(user_menu_main_value), id(user_menu_sub_value), 0,
+              id(user_menu_max_return_value));
+  - platform: template
+    name: "User Menu Down"
+    id: comfortnet_user_menu_down
+    icon: "mdi:arrow-down"
+    entity_category: "diagnostic"
+    on_press:
+      - lambda: |-
+          if (id(user_menu_main_value) < 255) {
+            id(user_menu_main_value)++;
+            id(user_menu_main).publish_state(id(user_menu_main_value));
+            id(user_menu_sub_value) = 0;
+            id(user_menu_sub).publish_state(0);
+            id(user_menu_offset_value) = 0;
+            id(user_menu_offset).publish_state(0);
+          }
+          id(comfortnet_id).get_user_menu(
+              id(user_menu_file_value), id(user_menu_main_value), id(user_menu_sub_value), 0,
+              id(user_menu_max_return_value));
+  - platform: template
+    name: "User Menu Left"
+    id: comfortnet_user_menu_left
+    icon: "mdi:arrow-left"
+    entity_category: "diagnostic"
+    on_press:
+      - lambda: |-
+          if (id(user_menu_sub_value) > 0) {
+            id(user_menu_sub_value)--;
+            id(user_menu_sub).publish_state(id(user_menu_sub_value));
+            id(user_menu_offset_value) = 0;
+            id(user_menu_offset).publish_state(0);
+          }
+          id(comfortnet_id).get_user_menu(
+              id(user_menu_file_value), id(user_menu_main_value), id(user_menu_sub_value), 0,
+              id(user_menu_max_return_value));
+  - platform: template
+    name: "User Menu Right"
+    id: comfortnet_user_menu_right
+    icon: "mdi:arrow-right"
+    entity_category: "diagnostic"
+    on_press:
+      - lambda: |-
+          if (id(user_menu_sub_value) < 255) {
+            id(user_menu_sub_value)++;
+            id(user_menu_sub).publish_state(id(user_menu_sub_value));
+            id(user_menu_offset_value) = 0;
+            id(user_menu_offset).publish_state(0);
+          }
+          id(comfortnet_id).get_user_menu(
+              id(user_menu_file_value), id(user_menu_main_value), id(user_menu_sub_value), 0,
+              id(user_menu_max_return_value));
+  - platform: template
+    name: "User Menu Enter"
+    id: comfortnet_user_menu_enter
+    icon: "mdi:keyboard-return"
+    entity_category: "diagnostic"
+    on_press:
+      - lambda: |-
+          id(user_menu_offset_value) = 0;
+          id(user_menu_offset).publish_state(0);
+          id(comfortnet_id).get_user_menu(
+              id(user_menu_file_value), id(user_menu_main_value), id(user_menu_sub_value), 0,
+              id(user_menu_max_return_value));
   - platform: template
     name: "Advance ComfortNet User Menu Page"
     id: comfortnet_advance_user_menu

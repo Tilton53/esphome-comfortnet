@@ -11,10 +11,12 @@ class ComfortnetTextSensor : public text_sensor::TextSensor, public Component, p
  public:
   void setup() override;
   void dump_config() override;
-  void set_sensor_id(const std::string &sensor_id) { this->sensor_id_ = sensor_id; }
+  void set_sensor_key(const std::string &sensor_key) { this->sensor_key_ = sensor_key; }
+  void set_sensor_target_device_type(uint8_t device_type) { this->device_type_ = static_cast<NodeType>(device_type); }
 
  protected:
-  std::string sensor_id_{""};
+  std::string sensor_key_{""};
+  NodeType device_type_{NodeType::ANY};
 };
 
 }  // namespace comfortnet

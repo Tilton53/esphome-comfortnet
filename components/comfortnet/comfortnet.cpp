@@ -56,6 +56,32 @@ static const uint8_t ADDRESS_MAC_POS = 2;
 // ComfortnetData keys for listeners
 static const std::string DATA_KEY_NETWORK_STATUS = "NETWORK_STATUS";
 static const std::string DATA_KEY_PENDING_MESSAGE_COUNT = "PENDING_MESSAGE_COUNT";
+static const std::string DATA_KEY_USER_MENU_RESPONSE = "USER_MENU_RESPONSE";
+
+static std::string format_user_menu_display_(const uint8_t *data, uint8_t data_len) {
+  std::string display;
+  for (uint8_t i = 0; i < data_len; i++) {
+    const uint8_t value = data[i];
+    if (value == 0xB6 || value == 0xB7) {
+      while (!display.empty() && display.back() == ' ') {
+        display.pop_back();
+      }
+      if (!display.empty() && display.back() != '\n') {
+        display.push_back('\n');
+      }
+    } else if (value >= 0x20 && value <= 0x7E) {
+      display.push_back(static_cast<char>(value));
+    } else {
+      char marker[5];
+      snprintf(marker, sizeof(marker), "<%02X>", value);
+      display.append(marker);
+    }
+  }
+  while (!display.empty() && (display.back() == '\n' || display.back() == ' ')) {
+    display.pop_back();
+  }
+  return display;
+}
 
 void Comfortnet::queue_message(PendingMessage message) {
   pending_messages_.push(std::move(message));
@@ -78,10 +104,15 @@ bool Comfortnet::get_user_menu(uint8_t menu_file, uint8_t main_menu, uint8_t sub
     ESP_LOGW(TAG, "User-menu max_return_bytes must be in 1..%u", MAX_PAYLOAD_SIZE - USER_MENU_REQUEST_SIZE);
     return false;
   }
+  if (this->user_menu_request_pending_) {
+    ESP_LOGW(TAG, "GET_USER_MENU request already pending; wait for its response before issuing another");
+    return false;
+  }
 
   std::vector<uint8_t> request{menu_file, main_menu, sub_menu, static_cast<uint8_t>(fetch_offset & 0xFF),
                                static_cast<uint8_t>((fetch_offset >> 8) & 0xFF), max_return_bytes};
   queue_message(PendingMessageToType(NodeType::GAS_FURNACE, MessageType::GET_USER_MENU, std::move(request)));
+  this->user_menu_request_pending_ = true;
   ESP_LOGI(TAG,
            "Queued GET_USER_MENU read (0x41): menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X "
            "max_return=%u",
@@ -535,6 +566,9 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
       char response_hex[3 * MAX_PAYLOAD_SIZE + 1];
       esphome::format_hex_pretty_to(response_hex, sizeof(response_hex), payload, payload_len, '.');
       this->last_user_menu_response_ = "Malformed short response: " + std::string(response_hex);
+      call_listener_(DATA_KEY_USER_MENU_RESPONSE,
+                     ComfortnetData(this->device_type_, ComfortnetData::DataType::STRING,
+                                    this->last_user_menu_response_));
       ESP_LOGW(TAG, "GET_USER_MENU response too short for six-byte header: len=%u payload=%s", payload_len,
                payload_hex);
     } else {
@@ -555,7 +589,13 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
         snprintf(response_text, sizeof(response_text),
                  "menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X max_return=%u data_len=%u data=%s",
                  payload[0], payload[1], payload[2], fetch_offset, payload[5], menu_data_len, menu_data_hex);
-        this->last_user_menu_response_ = response_text;
+        this->last_user_menu_response_ =
+            "Menu file " + std::to_string(payload[0]) + " / Main " + std::to_string(payload[1]) + " / Sub " +
+            std::to_string(payload[2]) + " / Offset " + std::to_string(fetch_offset) + "\n" +
+            format_user_menu_display_(payload + USER_MENU_REQUEST_SIZE, menu_data_len);
+        call_listener_(DATA_KEY_USER_MENU_RESPONSE,
+                       ComfortnetData(this->device_type_, ComfortnetData::DataType::STRING,
+                                      this->last_user_menu_response_));
         ESP_LOGI(TAG,
                  "GET_USER_MENU response menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X "
                  "max_return=%u menu_data_len=%u menu_data=%s",
@@ -566,6 +606,9 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
                  "menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X max_return=%u data_len=0",
                  payload[0], payload[1], payload[2], fetch_offset, payload[5]);
         this->last_user_menu_response_ = response_text;
+        call_listener_(DATA_KEY_USER_MENU_RESPONSE,
+                       ComfortnetData(this->device_type_, ComfortnetData::DataType::STRING,
+                                      this->last_user_menu_response_));
         ESP_LOGI(TAG,
                  "GET_USER_MENU response menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X "
                  "max_return=%u menu_data_len=0",
@@ -762,6 +805,7 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
             should_ack = MessageAckAction::ACK;
             if (pending_messages_.front().packet_type == MessageType::GET_USER_MENU &&
                 message_type == MessageType::GET_USER_MENU_RESPONSE) {
+              this->user_menu_request_pending_ = false;
               const auto &request = pending_messages_.front().payload;
               if (request.size() == USER_MENU_REQUEST_SIZE) {
                 const uint16_t fetch_offset = static_cast<uint16_t>(request[3]) |
@@ -1082,6 +1126,7 @@ void Comfortnet::disconnect_() {
   direct_poll_mode_ = false;
   direct_poll_command_waiting_tx_ = false;
   direct_poll_command_waiting_response_ = false;
+  user_menu_request_pending_ = false;
   direct_poll_command_tx_time_ = 0;
   awaiting_discovery_ = false;
   has_won_token_broadcast_ = false;

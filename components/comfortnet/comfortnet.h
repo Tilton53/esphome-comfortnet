@@ -347,6 +347,7 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
   MacAddress node_mac_list_[MAX_PAYLOAD_SIZE];
   std::map<NodeType, std::vector<uint8_t>> network_shared_data_;
   bool last_user_menu_response_valid_{false};
+  bool user_menu_request_pending_{false};
   uint8_t last_user_menu_file_{0};
   uint8_t last_user_menu_main_{0};
   uint8_t last_user_menu_sub_{0};
