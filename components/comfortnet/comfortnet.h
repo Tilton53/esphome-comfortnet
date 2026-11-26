@@ -305,7 +305,12 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
 
   uint32_t last_read_time_{0};                                 // Last time any data was read
   uint32_t last_address_confirm_time_{0};                      // Last time our address was confirmed
+  uint32_t last_r2r_time_{0};                                   // Last coordinator request-to-receive slot
   uint32_t slot_delay_{0};                                     // Calculated slot delay when we are arbitrating
+  bool direct_poll_mode_{false};                                // Fallback mode after prolonged R2R silence
+  bool direct_poll_command_waiting_tx_{false};
+  bool direct_poll_command_waiting_response_{false};
+  uint32_t direct_poll_command_tx_time_{0};
   QueuedMessageType message_queued_{QueuedMessageType::NONE};  // Whether we should arbitrate, or are sending normally
   bool awaiting_discovery_;                                    // Whether we are in the discovery process
   bool has_won_token_broadcast_;                               // Devices can only win token offer once per dataflow

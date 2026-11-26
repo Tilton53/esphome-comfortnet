@@ -11,6 +11,7 @@ static const char *const TAG = "comfortnet";
 
 static const uint32_t RECEIVE_TIMEOUT = 500;   // How long we will wait to receive a full message
 static const uint32_t REQUEST_TIMEOUT = 3000;  // How long we will wait for a reply to a request
+static const uint32_t R2R_FALLBACK_TIMEOUT = 15000;  // Switch to direct-poll fallback if R2R is absent
 static const uint32_t NETWORK_TIMEOUT =
     120000;  // We need to make sure our address is renewed at least every 120 seconds (Networking Specification 9.1.2)
 static const uint32_t SILENCE_TIMEOUT = 60000;  // How long we will wait for any message, before assuming the network is
@@ -274,6 +275,11 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
       static_cast<unsigned int>(source_node_type),
       static_cast<unsigned int>(message_type), packet_number, payload_len, crc, payload_hex);
   if (is_tx) {
+    if (this->direct_poll_command_waiting_tx_) {
+      this->direct_poll_command_waiting_tx_ = false;
+      this->direct_poll_command_waiting_response_ = true;
+      this->direct_poll_command_tx_time_ = now;
+    }
     if (message_type == MessageType::TOKEN_OFFER_RESPONSE) {
       // Most likely we won the token offer broadcast
       // We should only respond to 1 token offer per dataflow cycle to give other devices a chance
@@ -326,6 +332,10 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
         this->last_address_confirm_time_ = now;
         this->node_id_ = static_cast<NodeAddress>(payload[ADDRESS_NODE_ID_POS]);
         this->subnet_ = static_cast<Subnet>(payload[ADDRESS_SUBNET_POS]);
+        this->last_r2r_time_ = now;
+        this->direct_poll_mode_ = false;
+        this->direct_poll_command_waiting_tx_ = false;
+        this->direct_poll_command_waiting_response_ = false;
         return_payload.push_back(static_cast<uint8_t>(this->node_id_));
         return_payload.push_back(static_cast<uint8_t>(this->subnet_));
         this->mac_address_.write(return_payload);
@@ -359,14 +369,38 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
          * Core network packet
          */
         set_node_list_(payload, payload_len);
-        transmit_message_(src_adr, this->node_id_, this->subnet_, SendMethod::NO_ROUTE, 0, 0, this->device_type_,
-                          MessageType::SET_NETWORK_NODE_LIST_RESPONSE,
-                          PACKET_NUMBER(false, this->subnet_ == Subnet::VERSION_1),
-                          reinterpret_cast<uint8_t *>(node_list_ + 0), node_list_size_);
+        if (this->direct_poll_mode_ && pending_messages_.size() > 0 &&
+            !this->direct_poll_command_waiting_tx_ && !this->direct_poll_command_waiting_response_) {
+          PendingMessage msg = pending_messages_.front();
+          uint16_t command_id = 0;
+          if (msg.packet_type == MessageType::SET_CONTROL_COMMAND && msg.payload.size() >= CMD_HEADER_SIZE) {
+            command_id = static_cast<uint16_t>(msg.payload[0] | (msg.payload[1] << 8));
+          }
+          char payload_hex[3 * MAX_PAYLOAD_SIZE + 1];
+          esphome::format_hex_pretty_to(payload_hex, sizeof(payload_hex), msg.payload.data(), msg.payload.size(), '.');
+          ESP_LOGW(TAG,
+                   "Direct-poll fallback: replacing 0x94 node-list response with queued msg=0x%02X command=0x%04X "
+                   "method=0x%02X route=0x%02X queue_depth=%u payload=%s",
+                   static_cast<unsigned int>(msg.packet_type), command_id, static_cast<unsigned int>(msg.send_method),
+                   msg.send_param_1, static_cast<unsigned int>(pending_messages_.size()), payload_hex);
+          return_payload.insert(return_payload.end(), msg.payload.begin(), msg.payload.end());
+          this->direct_poll_command_waiting_tx_ = true;
+          transmit_message_(src_adr, this->node_id_, this->subnet_, msg.send_method, msg.send_param_1, 0,
+                            this->device_type_, msg.packet_type,
+                            PACKET_NUMBER(false, this->subnet_ == Subnet::VERSION_1), return_payload);
+        } else {
+          transmit_message_(src_adr, this->node_id_, this->subnet_, SendMethod::NO_ROUTE, 0, 0, this->device_type_,
+                            MessageType::SET_NETWORK_NODE_LIST_RESPONSE,
+                            PACKET_NUMBER(false, this->subnet_ == Subnet::VERSION_1),
+                            reinterpret_cast<uint8_t *>(node_list_ + 0), node_list_size_);
+        }
       } else if (message_type == MessageType::REQUEST_TO_RECEIVE_RESPONSE) {
         /**
          * R2R section
          */
+        this->last_r2r_time_ = now;
+        this->direct_poll_mode_ = false;
+        this->direct_poll_command_waiting_response_ = false;
         if (pending_messages_.size() == 0 && polling_queue_.size() > 0) {
           // If we have no commands to send, queue up a request to poll a device's status
           PollQueueEntry dev = polling_queue_.front();
@@ -455,6 +489,7 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
                      static_cast<unsigned int>(pending_messages_.front().packet_type), send_param_1,
                      static_cast<unsigned int>(pending_messages_.size()));
             pending_messages_.pop();
+            this->direct_poll_command_waiting_response_ = false;
             publish_pending_message_count_();
           }
         }
@@ -555,6 +590,10 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
       this->last_address_confirm_time_ = now;
       this->node_id_ = static_cast<NodeAddress>(payload[ADDRESS_NODE_ID_POS]);
       this->subnet_ = static_cast<Subnet>(payload[ADDRESS_SUBNET_POS]);
+      this->last_r2r_time_ = now;
+      this->direct_poll_mode_ = false;
+      this->direct_poll_command_waiting_tx_ = false;
+      this->direct_poll_command_waiting_response_ = false;
       return_payload.push_back(static_cast<uint8_t>(this->node_id_));
       return_payload.push_back(static_cast<uint8_t>(this->subnet_));
       this->mac_address_.write(return_payload);
@@ -667,6 +706,19 @@ void Comfortnet::loop() {
 #else
   const uint32_t now = (uint32_t) (esp_timer_get_time() / 1000);
 #endif
+  if (node_id_ != static_cast<NodeAddress>(0) && !this->direct_poll_mode_ && pending_messages_.size() > 0 &&
+      now - this->last_r2r_time_ >= R2R_FALLBACK_TIMEOUT) {
+    this->direct_poll_mode_ = true;
+    ESP_LOGW(TAG, "No R2R for %u ms with %u queued message(s); enabling direct-poll fallback",
+             static_cast<unsigned int>(now - this->last_r2r_time_),
+             static_cast<unsigned int>(pending_messages_.size()));
+  }
+  if (this->direct_poll_command_waiting_response_ &&
+      now - this->direct_poll_command_tx_time_ >= REQUEST_TIMEOUT) {
+    this->direct_poll_command_waiting_response_ = false;
+    ESP_LOGW(TAG, "Direct-poll fallback command response timed out; command remains queued");
+  }
+
   if (message_queued_ != QueuedMessageType::NONE) {
     uint32_t delay = message_queued_ == QueuedMessageType::ARBITRATION ? this->slot_delay_ : MINIMUM_SLOT_DELAY;
     if (now - this->last_read_time_ > delay) {
@@ -674,6 +726,7 @@ void Comfortnet::loop() {
         // Final check if line is busy
         message_queued_ = QueuedMessageType::NONE;
         slot_delay_ = 0;
+        this->direct_poll_command_waiting_tx_ = false;
         tx_message_.clear();
         if (awaiting_discovery_) {
           session_id_.clear();
@@ -721,6 +774,11 @@ void Comfortnet::disconnect_() {
   r2r_reply_.clear();
   message_queued_ = QueuedMessageType::NONE;
   slot_delay_ = 0;
+  last_r2r_time_ = 0;
+  direct_poll_mode_ = false;
+  direct_poll_command_waiting_tx_ = false;
+  direct_poll_command_waiting_response_ = false;
+  direct_poll_command_tx_time_ = 0;
   awaiting_discovery_ = false;
   has_won_token_broadcast_ = false;
 
