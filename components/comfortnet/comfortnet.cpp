@@ -649,11 +649,11 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
           } else if (message_type == PACKET_RESPONSE(pending_messages_.front().packet_type) &&
                      send_param_1 == pending_messages_.front().send_param_1) {
             should_ack = MessageAckAction::ACK;
-            if (pending_messages_.front().packet_type == static_cast<MessageType>(0x10) &&
-                message_type == static_cast<MessageType>(0x90)) {
+            if (pending_messages_.front().packet_type == MessageType::GET_USER_MENU &&
+                message_type == MessageType::GET_USER_MENU_RESPONSE) {
               char menu_payload_hex[3 * MAX_PAYLOAD_SIZE + 1];
               esphome::format_hex_pretty_to(menu_payload_hex, sizeof(menu_payload_hex), payload, payload_len, '.');
-              ESP_LOGI(TAG, "User/installer menu root response 0x90 len=%u payload=%s", payload_len,
+              ESP_LOGI(TAG, "User/installer menu root response 0xC1 len=%u payload=%s", payload_len,
                        menu_payload_hex);
             }
             if (poll_request_pending_ && pending_messages_.front().packet_type == pending_poll_message_ &&
@@ -787,9 +787,9 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
         if (!this->user_menu_scan_started_) {
           this->user_menu_scan_started_ = true;
           std::vector<uint8_t> menu_request{0x00, 0x00, 0x00};
-          queue_message(PendingMessageToType(
-              NodeType::GAS_FURNACE, static_cast<MessageType>(0x10), std::move(menu_request)));
-          ESP_LOGI(TAG, "Queued initial user/installer menu root request (packet=0x10 menu=0 item=0 action=0)");
+          queue_message(PendingMessageToType(NodeType::GAS_FURNACE, MessageType::GET_USER_MENU,
+                                             std::move(menu_request)));
+          ESP_LOGI(TAG, "Queued initial user/installer menu root request (packet=0x41 menu=0 item=0 action=0)");
         }
       } else if (start_id != this->node_id_) {
         ESP_LOGI(TAG, "Network address reassigned: 0x%02X (Old: 0x%02X)", static_cast<unsigned int>(this->node_id_),
