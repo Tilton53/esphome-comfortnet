@@ -253,6 +253,14 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
     return;
   }
 
+  // The coordinator may keep an assigned node active through addressed traffic rather than
+  // periodic ADDRESS_CONFIRMATION messages. Treat valid coordinator unicast traffic as
+  // evidence that this local session is still recognized by the network.
+  if (!is_tx && node_id_ != static_cast<NodeAddress>(0) && src_adr == NodeAddress::COORDINATOR &&
+      dst_adr == node_id_ && subnet == subnet_) {
+    this->last_address_confirm_time_ = now;
+  }
+
   // Notice, the checksum and payload are printed out of order here for viewing convenience!
   ESP_LOGD(TAG,
            "Dir | Dest | Src  | Subnet | Meth | Params | SrcNode | MsgType | PktNum | Len | Checksum | Payload HEX");
