@@ -72,6 +72,10 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     await climate.register_climate(var, config)
+    cg.add(var.set_supported_custom_presets(list(config[CONF_CUSTOM_PRESETS].values())))
+    cg.add(
+        var.set_supported_custom_fan_modes(list(config[CONF_CUSTOM_FAN_MODES].values()))
+    )
 
     paren = await cg.get_variable(config[CONF_COMFORTNET_ID])
     cg.add(var.set_comfortnet_parent(paren))

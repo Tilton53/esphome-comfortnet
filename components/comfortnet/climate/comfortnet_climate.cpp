@@ -39,12 +39,6 @@ climate::ClimateTraits ComfortnetClimate::traits() {
   if (!mode_id_.empty()) {
     traits.set_supported_modes(map_values_as_set(modes_));
   }
-  if (!custom_preset_id_.empty()) {
-    traits.set_supported_custom_presets(map_values_as_set(custom_presets_));
-  }
-  if (!custom_fan_mode_id_.empty()) {
-    traits.set_supported_custom_fan_modes(map_values_as_set(custom_fan_modes_));
-  }
   return traits;
 }
 
