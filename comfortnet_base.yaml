@@ -36,6 +36,9 @@ preferences:
 wifi:
   ap:
 captive_portal:
+web_server:
+  port: 80
+  version: 3
 api:
   services:
     - service: thermostat_set_heat_setpoint
@@ -112,6 +115,24 @@ api:
       then:
         - lambda: |-
             id(comfortnet_id).furnace_set_fan_demand(mode, demand_percent, duration_minutes);
+    - service: comfortnet_get_user_menu
+      variables:
+        menu_file: int
+        main_menu: int
+        sub_menu: int
+        fetch_offset: int
+        max_return_bytes: int
+      then:
+        - lambda: |-
+            if (menu_file < 0 || menu_file > 255 || main_menu < 0 || main_menu > 255 ||
+                sub_menu < 0 || sub_menu > 255 || fetch_offset < 0 || fetch_offset > 65535 ||
+                max_return_bytes < 1 || max_return_bytes > 234) {
+              ESP_LOGW("comfortnet", "Rejected invalid GET_USER_MENU request fields");
+              return;
+            }
+            id(comfortnet_id).get_user_menu(static_cast<uint8_t>(menu_file), static_cast<uint8_t>(main_menu),
+                                            static_cast<uint8_t>(sub_menu), static_cast<uint16_t>(fetch_offset),
+                                            static_cast<uint8_t>(max_return_bytes));
 ota:
   platform: esphome
 logger:
@@ -133,6 +154,88 @@ comfortnet:
   update_interval: ${comfortnet_update_interval}
   device_type: ${device_type}
   ct_version: ${ct_version}
+globals:
+  - id: user_menu_file_value
+    type: uint8_t
+    restore_value: false
+    initial_value: "0"
+  - id: user_menu_main_value
+    type: uint8_t
+    restore_value: false
+    initial_value: "0"
+  - id: user_menu_sub_value
+    type: uint8_t
+    restore_value: false
+    initial_value: "0"
+  - id: user_menu_offset_value
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+  - id: user_menu_max_return_value
+    type: uint8_t
+    restore_value: false
+    initial_value: "32"
+number:
+  - platform: template
+    name: "User Menu File"
+    id: user_menu_file
+    min_value: 0
+    max_value: 255
+    step: 1
+    mode: box
+    update_interval: 1s
+    lambda: return id(user_menu_file_value);
+    set_action:
+      - lambda: id(user_menu_file_value) = static_cast<uint8_t>(x);
+    entity_category: config
+  - platform: template
+    name: "User Menu Main"
+    id: user_menu_main
+    min_value: 0
+    max_value: 255
+    step: 1
+    mode: box
+    update_interval: 1s
+    lambda: return id(user_menu_main_value);
+    set_action:
+      - lambda: id(user_menu_main_value) = static_cast<uint8_t>(x);
+    entity_category: config
+  - platform: template
+    name: "User Menu Sub"
+    id: user_menu_sub
+    min_value: 0
+    max_value: 255
+    step: 1
+    mode: box
+    update_interval: 1s
+    lambda: return id(user_menu_sub_value);
+    set_action:
+      - lambda: id(user_menu_sub_value) = static_cast<uint8_t>(x);
+    entity_category: config
+  - platform: template
+    name: "User Menu Fetch Offset"
+    id: user_menu_offset
+    min_value: 0
+    max_value: 65535
+    step: 1
+    mode: box
+    update_interval: 1s
+    lambda: return id(user_menu_offset_value);
+    set_action:
+      - lambda: id(user_menu_offset_value) = static_cast<uint32_t>(x);
+    entity_category: config
+  - platform: template
+    name: "User Menu Max Return Bytes"
+    id: user_menu_max_return
+    min_value: 1
+    max_value: 234
+    step: 1
+    mode: box
+    update_interval: 1s
+    lambda: return id(user_menu_max_return_value);
+    set_action:
+      - lambda: id(user_menu_max_return_value) = static_cast<uint8_t>(x);
+    entity_category: config
 sensor:
   - platform: wifi_signal
     name: "WiFi Signal Strength"
@@ -152,6 +255,18 @@ binary_sensor:
     id: comfortnet_network_status
     device_class: connectivity
     data_key: "NETWORK_STATUS"
+text_sensor:
+  - platform: template
+    name: "ComfortNet User Menu Response"
+    id: user_menu_response
+    update_interval: 1s
+    entity_category: diagnostic
+    lambda: |-
+      const auto &response = id(comfortnet_id).last_user_menu_response();
+      if (response.empty()) {
+        return {};
+      }
+      return response;
 button:
   - platform: template
     name: "Reconnect to ComfortNet"
@@ -160,6 +275,47 @@ button:
     entity_category: "config"
     on_press:
       - lambda: id(comfortnet_id).reconnect();
+  - platform: template
+    name: "Read ComfortNet Root User Menu"
+    id: comfortnet_read_user_menu_root
+    icon: "mdi:menu"
+    entity_category: "diagnostic"
+    on_press:
+      - lambda: |-
+          id(user_menu_file_value) = 0;
+          id(user_menu_main_value) = 0;
+          id(user_menu_sub_value) = 0;
+          id(user_menu_offset_value) = 0;
+          id(user_menu_file).publish_state(0);
+          id(user_menu_main).publish_state(0);
+          id(user_menu_sub).publish_state(0);
+          id(user_menu_offset).publish_state(0);
+          id(comfortnet_id).get_user_menu(0, 0, 0, 0, id(user_menu_max_return_value));
+  - platform: template
+    name: "Read Selected ComfortNet User Menu Page"
+    id: comfortnet_read_selected_user_menu
+    icon: "mdi:menu-open"
+    entity_category: "diagnostic"
+    on_press:
+      - lambda: |-
+          id(comfortnet_id).get_user_menu(
+              id(user_menu_file_value), id(user_menu_main_value), id(user_menu_sub_value),
+              static_cast<uint16_t>(id(user_menu_offset_value)), id(user_menu_max_return_value));
+  - platform: template
+    name: "Advance ComfortNet User Menu Page"
+    id: comfortnet_advance_user_menu
+    icon: "mdi:page-next"
+    entity_category: "diagnostic"
+    on_press:
+      - lambda: |-
+          const uint32_t next_offset = id(comfortnet_id).next_user_menu_offset();
+          if (next_offset > 65535) {
+            ESP_LOGW("comfortnet", "Next user menu offset exceeds 16-bit range");
+            return;
+          }
+          id(user_menu_offset_value) = next_offset;
+          id(user_menu_offset).publish_state(next_offset);
+          id(comfortnet_id).get_next_user_menu_page(id(user_menu_max_return_value));
   - platform: restart
     name: "Restart ESP"
     id: restart_esp

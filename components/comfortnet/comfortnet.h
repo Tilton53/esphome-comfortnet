@@ -226,6 +226,15 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
   bool thermostat_set_hold_override(bool enabled);
   bool furnace_set_demand(CommandType command, int32_t demand_percent, int32_t duration_minutes);
   bool furnace_set_fan_demand(int32_t mode, int32_t demand_percent, int32_t duration_minutes);
+  bool get_user_menu(uint8_t menu_file, uint8_t main_menu, uint8_t sub_menu, uint16_t fetch_offset,
+                     uint8_t max_return_bytes);
+  bool get_next_user_menu_page(uint8_t max_return_bytes);
+  uint32_t next_user_menu_offset() const {
+    return this->last_user_menu_response_valid_
+               ? static_cast<uint32_t>(this->last_user_menu_offset_) + this->last_user_menu_data_len_
+               : 0;
+  }
+  const std::string &last_user_menu_response() const { return this->last_user_menu_response_; }
 
  protected:
   uint32_t update_interval_millis_{30000};
@@ -318,7 +327,6 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
   bool direct_poll_mode_{false};                                // Fallback mode after prolonged R2R silence
   bool direct_poll_command_waiting_tx_{false};
   bool direct_poll_command_waiting_response_{false};
-  bool user_menu_capture_started_{false};
   uint32_t direct_poll_command_tx_time_{0};
   QueuedMessageType message_queued_{QueuedMessageType::NONE};  // Whether we should arbitrate, or are sending normally
   bool awaiting_discovery_;                                    // Whether we are in the discovery process
@@ -338,6 +346,13 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
   NodeType node_list_[MAX_PAYLOAD_SIZE];
   MacAddress node_mac_list_[MAX_PAYLOAD_SIZE];
   std::map<NodeType, std::vector<uint8_t>> network_shared_data_;
+  bool last_user_menu_response_valid_{false};
+  uint8_t last_user_menu_file_{0};
+  uint8_t last_user_menu_main_{0};
+  uint8_t last_user_menu_sub_{0};
+  uint8_t last_user_menu_data_len_{0};
+  uint16_t last_user_menu_offset_{0};
+  std::string last_user_menu_response_;
 
   std::map<std::string, std::vector<std::function<void(ComfortnetData)>>> listeners_;
   std::map<CommandType, std::vector<std::function<void(ComfortnetCommandData)>>> command_listeners_;

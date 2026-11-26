@@ -38,7 +38,6 @@ static const uint8_t PAYLOAD_LENGTH_POS = 9; /* 0-MAX_PAYLOAD_SIZE */
 
 static const uint8_t CMD_HEADER_SIZE = 2;
 static const uint8_t USER_MENU_REQUEST_SIZE = 6;
-static const uint8_t USER_MENU_CAPTURE_MAX_RETURN_BYTES = 0x20;
 
 // Data indices (Relative to data, not packet)
 static const uint8_t ACK_POS = 0;
@@ -67,6 +66,41 @@ void Comfortnet::publish_pending_message_count_() {
   call_listener_(DATA_KEY_PENDING_MESSAGE_COUNT,
                  (struct ComfortnetData) {device_type_, ComfortnetData::DataType::FLOAT,
                                           static_cast<float>(pending_messages_.size())});
+}
+
+bool Comfortnet::get_user_menu(uint8_t menu_file, uint8_t main_menu, uint8_t sub_menu, uint16_t fetch_offset,
+                               uint8_t max_return_bytes) {
+  if (this->node_id_ == static_cast<NodeAddress>(0)) {
+    ESP_LOGW(TAG, "Cannot request user menu while not joined to the ClimateTalk network");
+    return false;
+  }
+  if (max_return_bytes == 0 || max_return_bytes > MAX_PAYLOAD_SIZE - USER_MENU_REQUEST_SIZE) {
+    ESP_LOGW(TAG, "User-menu max_return_bytes must be in 1..%u", MAX_PAYLOAD_SIZE - USER_MENU_REQUEST_SIZE);
+    return false;
+  }
+
+  std::vector<uint8_t> request{menu_file, main_menu, sub_menu, static_cast<uint8_t>(fetch_offset & 0xFF),
+                               static_cast<uint8_t>((fetch_offset >> 8) & 0xFF), max_return_bytes};
+  queue_message(PendingMessageToType(NodeType::GAS_FURNACE, MessageType::GET_USER_MENU, std::move(request)));
+  ESP_LOGI(TAG,
+           "Queued GET_USER_MENU read (0x41): menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X "
+           "max_return=%u",
+           menu_file, main_menu, sub_menu, fetch_offset, max_return_bytes);
+  return true;
+}
+
+bool Comfortnet::get_next_user_menu_page(uint8_t max_return_bytes) {
+  if (!this->last_user_menu_response_valid_ || this->last_user_menu_data_len_ == 0) {
+    ESP_LOGW(TAG, "Cannot advance GET_USER_MENU: no non-empty response page is available");
+    return false;
+  }
+  const uint32_t next_offset = static_cast<uint32_t>(this->last_user_menu_offset_) + this->last_user_menu_data_len_;
+  if (next_offset > UINT16_MAX) {
+    ESP_LOGW(TAG, "Cannot advance GET_USER_MENU: next fetch offset exceeds 16-bit range");
+    return false;
+  }
+  return this->get_user_menu(this->last_user_menu_file_, this->last_user_menu_main_, this->last_user_menu_sub_,
+                             static_cast<uint16_t>(next_offset), max_return_bytes);
 }
 
 void Comfortnet::log_unknown_furnace_mdi_(MessageType message_type, const uint8_t *payload, uint8_t payload_len) {
@@ -497,21 +531,41 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
   }
   if (!is_tx && message_type == MessageType::GET_USER_MENU_RESPONSE) {
     if (payload_len < USER_MENU_REQUEST_SIZE) {
+      this->last_user_menu_response_valid_ = false;
+      char response_hex[3 * MAX_PAYLOAD_SIZE + 1];
+      esphome::format_hex_pretty_to(response_hex, sizeof(response_hex), payload, payload_len, '.');
+      this->last_user_menu_response_ = "Malformed short response: " + std::string(response_hex);
       ESP_LOGW(TAG, "GET_USER_MENU response too short for six-byte header: len=%u payload=%s", payload_len,
                payload_hex);
     } else {
       const uint16_t fetch_offset = static_cast<uint16_t>(payload[3]) |
                                     (static_cast<uint16_t>(payload[4]) << 8);
       const uint8_t menu_data_len = payload_len - USER_MENU_REQUEST_SIZE;
+      this->last_user_menu_file_ = payload[0];
+      this->last_user_menu_main_ = payload[1];
+      this->last_user_menu_sub_ = payload[2];
+      this->last_user_menu_offset_ = fetch_offset;
+      this->last_user_menu_data_len_ = menu_data_len;
+      this->last_user_menu_response_valid_ = true;
       if (menu_data_len > 0) {
         char menu_data_hex[3 * MAX_PAYLOAD_SIZE + 1];
         esphome::format_hex_pretty_to(menu_data_hex, sizeof(menu_data_hex), payload + USER_MENU_REQUEST_SIZE,
                                       menu_data_len, '.');
+        char response_text[3 * MAX_PAYLOAD_SIZE + 160];
+        snprintf(response_text, sizeof(response_text),
+                 "menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X max_return=%u data_len=%u data=%s",
+                 payload[0], payload[1], payload[2], fetch_offset, payload[5], menu_data_len, menu_data_hex);
+        this->last_user_menu_response_ = response_text;
         ESP_LOGI(TAG,
                  "GET_USER_MENU response menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X "
                  "max_return=%u menu_data_len=%u menu_data=%s",
                  payload[0], payload[1], payload[2], fetch_offset, payload[5], menu_data_len, menu_data_hex);
       } else {
+        char response_text[128];
+        snprintf(response_text, sizeof(response_text),
+                 "menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X max_return=%u data_len=0",
+                 payload[0], payload[1], payload[2], fetch_offset, payload[5]);
+        this->last_user_menu_response_ = response_text;
         ESP_LOGI(TAG,
                  "GET_USER_MENU response menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X "
                  "max_return=%u menu_data_len=0",
@@ -846,17 +900,6 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
         ESP_LOGI(TAG, "Joined network as address: 0x%02X", static_cast<unsigned int>(this->node_id_));
         call_listener_(DATA_KEY_NETWORK_STATUS,
                        (struct ComfortnetData) {this->device_type_, ComfortnetData::DataType::BOOLEAN, true});
-        if (!this->user_menu_capture_started_) {
-          this->user_menu_capture_started_ = true;
-          std::vector<uint8_t> menu_request{0x00, 0x00, 0x00, 0x00, 0x00,
-                                           USER_MENU_CAPTURE_MAX_RETURN_BYTES};
-          queue_message(PendingMessageToType(NodeType::GAS_FURNACE, MessageType::GET_USER_MENU,
-                                             std::move(menu_request)));
-          ESP_LOGI(TAG,
-                   "Queued one-time GET_USER_MENU read-only capture (0x41): menu_file=0 main=0 sub=0 "
-                   "offset=0 max_return=%u",
-                   USER_MENU_CAPTURE_MAX_RETURN_BYTES);
-        }
       } else if (start_id != this->node_id_) {
         ESP_LOGI(TAG, "Network address reassigned: 0x%02X (Old: 0x%02X)", static_cast<unsigned int>(this->node_id_),
                  static_cast<unsigned int>(start_id));
@@ -1039,7 +1082,6 @@ void Comfortnet::disconnect_() {
   direct_poll_mode_ = false;
   direct_poll_command_waiting_tx_ = false;
   direct_poll_command_waiting_response_ = false;
-  user_menu_capture_started_ = false;
   direct_poll_command_tx_time_ = 0;
   awaiting_discovery_ = false;
   has_won_token_broadcast_ = false;
