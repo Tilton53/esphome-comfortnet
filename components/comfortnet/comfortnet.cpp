@@ -535,13 +535,6 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
         this->awaiting_discovery_ = false;
         ESP_LOGI(TAG, "Network address reassigned: 0x%02X (Old: 0x%02X)", static_cast<unsigned int>(this->node_id_),
                  static_cast<unsigned int>(start_id));
-        if (start_id == static_cast<NodeAddress>(0) && !this->user_menu_scan_started_) {
-          this->user_menu_scan_started_ = true;
-          std::vector<uint8_t> menu_request{0x00, 0x00, 0x00};
-          queue_message(PendingMessageToType(
-              NodeType::GAS_FURNACE, static_cast<MessageType>(0x10), std::move(menu_request)));
-          ESP_LOGI(TAG, "Queued initial user/installer menu root request (packet=0x10 menu=0 item=0 action=0)");
-        }
       } else if (message_type == MessageType::TOKEN_OFFER && !has_won_token_broadcast_ &&
                  (pending_messages_.size() > 0 || polling_queue_.size() > 0)) {
         NodeType offer_node_type = static_cast<NodeType>(payload[TOKEN_OFFER_NODE_TYPE_POS]);
@@ -791,6 +784,13 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
         ESP_LOGI(TAG, "Joined network as address: 0x%02X", static_cast<unsigned int>(this->node_id_));
         call_listener_(DATA_KEY_NETWORK_STATUS,
                        (struct ComfortnetData) {this->device_type_, ComfortnetData::DataType::BOOLEAN, true});
+        if (!this->user_menu_scan_started_) {
+          this->user_menu_scan_started_ = true;
+          std::vector<uint8_t> menu_request{0x00, 0x00, 0x00};
+          queue_message(PendingMessageToType(
+              NodeType::GAS_FURNACE, static_cast<MessageType>(0x10), std::move(menu_request)));
+          ESP_LOGI(TAG, "Queued initial user/installer menu root request (packet=0x10 menu=0 item=0 action=0)");
+        }
       } else if (start_id != this->node_id_) {
         ESP_LOGI(TAG, "Network address reassigned: 0x%02X (Old: 0x%02X)", static_cast<unsigned int>(this->node_id_),
                  static_cast<unsigned int>(start_id));
