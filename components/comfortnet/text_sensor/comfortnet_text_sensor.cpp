@@ -1,7 +1,6 @@
 #include "esphome/core/log.h"
 #include "comfortnet_text_sensor.h"
 
-namespace esphome {
 namespace comfortnet {
 
 static const char *const TAG = "comfortnet.text_sensor";
@@ -24,4 +23,3 @@ void ComfortnetTextSensor::dump_config() {
 }
 
 }  // namespace comfortnet
-}  // namespace esphome

@@ -4,10 +4,9 @@
 #include "esphome/components/text_sensor/text_sensor.h"
 #include "../comfortnet.h"
 
-namespace esphome {
 namespace comfortnet {
 
-class ComfortnetTextSensor : public text_sensor::TextSensor, public Component, public ComfortnetClient {
+class ComfortnetTextSensor : public esphome::text_sensor::TextSensor, public esphome::Component, public ComfortnetClient {
  public:
   void setup() override;
   void dump_config() override;
@@ -20,4 +19,3 @@ class ComfortnetTextSensor : public text_sensor::TextSensor, public Component, p
 };
 
 }  // namespace comfortnet
-}  // namespace esphome
