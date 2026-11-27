@@ -38,6 +38,12 @@ static const uint8_t PAYLOAD_LENGTH_POS = 9; /* 0-MAX_PAYLOAD_SIZE */
 
 static const uint8_t CMD_HEADER_SIZE = 2;
 static const uint8_t USER_MENU_REQUEST_SIZE = 6;
+static const uint8_t USER_MENU_SCAN_FILE_COUNT = 3;
+static const uint8_t USER_MENU_SCAN_MAIN_COUNT = 7;
+static const uint16_t USER_MENU_SCAN_SUB_COUNT = 256;
+static const uint16_t USER_MENU_SCAN_TOTAL =
+    USER_MENU_SCAN_FILE_COUNT * USER_MENU_SCAN_MAIN_COUNT * USER_MENU_SCAN_SUB_COUNT;
+static const uint32_t USER_MENU_SCAN_INTERVAL = 1500;
 
 // Data indices (Relative to data, not packet)
 static const uint8_t ACK_POS = 0;
@@ -94,6 +100,14 @@ void Comfortnet::publish_pending_message_count_() {
                                           static_cast<float>(pending_messages_.size())});
 }
 
+void Comfortnet::publish_user_menu_response_() {
+  if (!this->user_menu_scan_active_) {
+    call_listener_(DATA_KEY_USER_MENU_RESPONSE,
+                   ComfortnetData(this->device_type_, ComfortnetData::DataType::STRING,
+                                  this->last_user_menu_response_));
+  }
+}
+
 bool Comfortnet::get_user_menu(uint8_t menu_file, uint8_t main_menu, uint8_t sub_menu, uint16_t fetch_offset,
                                uint8_t max_return_bytes) {
   if (this->node_id_ == static_cast<NodeAddress>(0)) {
@@ -108,6 +122,10 @@ bool Comfortnet::get_user_menu(uint8_t menu_file, uint8_t main_menu, uint8_t sub
     ESP_LOGW(TAG, "GET_USER_MENU request already pending; wait for its response before issuing another");
     return false;
   }
+  if (this->user_menu_scan_active_) {
+    this->user_menu_scan_active_ = false;
+    ESP_LOGI(TAG, "Pausing automatic GET_USER_MENU scan for a manual web request");
+  }
 
   std::vector<uint8_t> request{menu_file, main_menu, sub_menu, static_cast<uint8_t>(fetch_offset & 0xFF),
                                static_cast<uint8_t>((fetch_offset >> 8) & 0xFF), max_return_bytes};
@@ -118,6 +136,61 @@ bool Comfortnet::get_user_menu(uint8_t menu_file, uint8_t main_menu, uint8_t sub
            "max_return=%u",
            menu_file, main_menu, sub_menu, fetch_offset, max_return_bytes);
   return true;
+}
+
+void Comfortnet::start_user_menu_scan() {
+  if (this->node_id_ == static_cast<NodeAddress>(0)) {
+    ESP_LOGW(TAG, "Cannot start user-menu scan while not joined to the ClimateTalk network");
+    return;
+  }
+  if (this->user_menu_scan_index_ >= USER_MENU_SCAN_TOTAL) {
+    ESP_LOGI(TAG, "GET_USER_MENU scan already completed (%u selectors)",
+             static_cast<unsigned int>(USER_MENU_SCAN_TOTAL));
+    return;
+  }
+  if (!this->user_menu_scan_started_) {
+    this->user_menu_scan_started_ = true;
+    this->user_menu_scan_index_ = 0;
+  }
+  this->user_menu_scan_active_ = true;
+  this->user_menu_scan_next_time_ = 0;
+  ESP_LOGI(TAG,
+           "Starting GET_USER_MENU scan at selector %u/%u (files=0..2 mains=0..6 subs=0..255, one request every "
+           "%u ms; may take hours; use web stop button to pause)",
+           static_cast<unsigned int>(this->user_menu_scan_index_ + 1),
+           static_cast<unsigned int>(USER_MENU_SCAN_TOTAL), static_cast<unsigned int>(USER_MENU_SCAN_INTERVAL));
+}
+
+void Comfortnet::stop_user_menu_scan() {
+  if (this->user_menu_scan_active_) {
+    this->user_menu_scan_active_ = false;
+    ESP_LOGI(TAG, "Paused GET_USER_MENU scan at selector %u/%u", static_cast<unsigned int>(this->user_menu_scan_index_ + 1),
+             static_cast<unsigned int>(USER_MENU_SCAN_TOTAL));
+    publish_user_menu_response_();
+  }
+}
+
+void Comfortnet::queue_next_user_menu_scan_(uint32_t now) {
+  if (!this->user_menu_scan_active_ || this->user_menu_request_pending_ ||
+      this->node_id_ == static_cast<NodeAddress>(0) || !this->pending_messages_.empty() ||
+      static_cast<int32_t>(now - this->user_menu_scan_next_time_) < 0) {
+    return;
+  }
+  if (this->user_menu_scan_index_ >= USER_MENU_SCAN_TOTAL) {
+    this->user_menu_scan_active_ = false;
+    ESP_LOGI(TAG, "GET_USER_MENU scan complete (%u selectors)", static_cast<unsigned int>(USER_MENU_SCAN_TOTAL));
+    return;
+  }
+
+  const uint16_t index = this->user_menu_scan_index_;
+  const uint8_t menu_file = static_cast<uint8_t>(index / (USER_MENU_SCAN_MAIN_COUNT * USER_MENU_SCAN_SUB_COUNT));
+  const uint8_t main_menu = static_cast<uint8_t>((index / USER_MENU_SCAN_SUB_COUNT) % USER_MENU_SCAN_MAIN_COUNT);
+  const uint8_t sub_menu = static_cast<uint8_t>(index % USER_MENU_SCAN_SUB_COUNT);
+  const std::vector<uint8_t> request{menu_file, main_menu, sub_menu, 0x00, 0x00, 0x20};
+  queue_message(PendingMessageToType(NodeType::GAS_FURNACE, MessageType::GET_USER_MENU, request));
+  this->user_menu_request_pending_ = true;
+  ESP_LOGI(TAG, "GET_USER_MENU scan request %u/%u file=0x%02X main=0x%02X sub=0x%02X", index + 1,
+           static_cast<unsigned int>(USER_MENU_SCAN_TOTAL), menu_file, main_menu, sub_menu);
 }
 
 bool Comfortnet::get_next_user_menu_page(uint8_t max_return_bytes) {
@@ -566,9 +639,7 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
       char response_hex[3 * MAX_PAYLOAD_SIZE + 1];
       esphome::format_hex_pretty_to(response_hex, sizeof(response_hex), payload, payload_len, '.');
       this->last_user_menu_response_ = "Malformed short response: " + std::string(response_hex);
-      call_listener_(DATA_KEY_USER_MENU_RESPONSE,
-                     ComfortnetData(this->device_type_, ComfortnetData::DataType::STRING,
-                                    this->last_user_menu_response_));
+      publish_user_menu_response_();
       ESP_LOGW(TAG, "GET_USER_MENU response too short for six-byte header: len=%u payload=%s", payload_len,
                payload_hex);
     } else {
@@ -593,9 +664,7 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
             "Menu file " + std::to_string(payload[0]) + " / Main " + std::to_string(payload[1]) + " / Sub " +
             std::to_string(payload[2]) + " / Offset " + std::to_string(fetch_offset) + "\n" +
             format_user_menu_display_(payload + USER_MENU_REQUEST_SIZE, menu_data_len);
-        call_listener_(DATA_KEY_USER_MENU_RESPONSE,
-                       ComfortnetData(this->device_type_, ComfortnetData::DataType::STRING,
-                                      this->last_user_menu_response_));
+        publish_user_menu_response_();
         ESP_LOGI(TAG,
                  "GET_USER_MENU response menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X "
                  "max_return=%u menu_data_len=%u menu_data=%s",
@@ -606,9 +675,7 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
                  "menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X max_return=%u data_len=0",
                  payload[0], payload[1], payload[2], fetch_offset, payload[5]);
         this->last_user_menu_response_ = response_text;
-        call_listener_(DATA_KEY_USER_MENU_RESPONSE,
-                       ComfortnetData(this->device_type_, ComfortnetData::DataType::STRING,
-                                      this->last_user_menu_response_));
+        publish_user_menu_response_();
         ESP_LOGI(TAG,
                  "GET_USER_MENU response menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X "
                  "max_return=%u menu_data_len=0",
@@ -814,6 +881,26 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
                          "Matched GET_USER_MENU response to request menu_file=0x%02X main=0x%02X sub=0x%02X "
                          "offset=0x%04X max_return=%u",
                          request[0], request[1], request[2], fetch_offset, request[5]);
+                const uint8_t expected_file = static_cast<uint8_t>(
+                    this->user_menu_scan_index_ / (USER_MENU_SCAN_MAIN_COUNT * USER_MENU_SCAN_SUB_COUNT));
+                const uint8_t expected_main = static_cast<uint8_t>(
+                    (this->user_menu_scan_index_ / USER_MENU_SCAN_SUB_COUNT) % USER_MENU_SCAN_MAIN_COUNT);
+                const uint8_t expected_sub = static_cast<uint8_t>(this->user_menu_scan_index_ % USER_MENU_SCAN_SUB_COUNT);
+                if (this->user_menu_scan_active_ && request[0] == expected_file && request[1] == expected_main &&
+                    request[2] == expected_sub) {
+                  this->user_menu_scan_index_++;
+                  this->user_menu_scan_next_time_ = now + USER_MENU_SCAN_INTERVAL;
+                  if (this->user_menu_scan_index_ >= USER_MENU_SCAN_TOTAL) {
+                    this->user_menu_scan_active_ = false;
+                    ESP_LOGI(TAG, "Automatic GET_USER_MENU scan completed (%u selector combinations)",
+                             static_cast<unsigned int>(USER_MENU_SCAN_TOTAL));
+                    publish_user_menu_response_();
+                  } else if ((this->user_menu_scan_index_ % 128) == 0) {
+                    ESP_LOGI(TAG, "Automatic GET_USER_MENU scan progress: %u/%u", this->user_menu_scan_index_,
+                             static_cast<unsigned int>(USER_MENU_SCAN_TOTAL));
+                    publish_user_menu_response_();
+                  }
+                }
               }
             }
             if (poll_request_pending_ && pending_messages_.front().packet_type == pending_poll_message_ &&
@@ -944,6 +1031,7 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
         ESP_LOGI(TAG, "Joined network as address: 0x%02X", static_cast<unsigned int>(this->node_id_));
         call_listener_(DATA_KEY_NETWORK_STATUS,
                        (struct ComfortnetData) {this->device_type_, ComfortnetData::DataType::BOOLEAN, true});
+        this->start_user_menu_scan();
       } else if (start_id != this->node_id_) {
         ESP_LOGI(TAG, "Network address reassigned: 0x%02X (Old: 0x%02X)", static_cast<unsigned int>(this->node_id_),
                  static_cast<unsigned int>(start_id));
@@ -1067,6 +1155,8 @@ void Comfortnet::loop() {
     ESP_LOGW(TAG, "Direct-poll fallback command response timed out; command remains queued");
   }
 
+  this->queue_next_user_menu_scan_(now);
+
   if (message_queued_ != QueuedMessageType::NONE) {
     uint32_t delay = message_queued_ == QueuedMessageType::ARBITRATION ? this->slot_delay_ : MINIMUM_SLOT_DELAY;
     if (now - this->last_read_time_ > delay) {
@@ -1127,6 +1217,7 @@ void Comfortnet::disconnect_() {
   direct_poll_command_waiting_tx_ = false;
   direct_poll_command_waiting_response_ = false;
   user_menu_request_pending_ = false;
+  user_menu_scan_active_ = false;
   direct_poll_command_tx_time_ = 0;
   awaiting_discovery_ = false;
   has_won_token_broadcast_ = false;

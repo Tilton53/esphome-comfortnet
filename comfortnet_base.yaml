@@ -281,6 +281,20 @@ button:
           id(user_menu_offset).publish_state(0);
           id(comfortnet_id).get_user_menu(0, 0, 0, 0, id(user_menu_max_return_value));
   - platform: template
+    name: "Start or Resume Full User Menu Scan"
+    id: comfortnet_start_user_menu_scan
+    icon: "mdi:playlist-play"
+    entity_category: "diagnostic"
+    on_press:
+      - lambda: id(comfortnet_id).start_user_menu_scan();
+  - platform: template
+    name: "Stop Full User Menu Scan"
+    id: comfortnet_stop_user_menu_scan
+    icon: "mdi:stop"
+    entity_category: "diagnostic"
+    on_press:
+      - lambda: id(comfortnet_id).stop_user_menu_scan();
+  - platform: template
     name: "Read Selected ComfortNet User Menu Page"
     id: comfortnet_read_selected_user_menu
     icon: "mdi:menu-open"

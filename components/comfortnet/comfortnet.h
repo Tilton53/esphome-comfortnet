@@ -229,6 +229,8 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
   bool get_user_menu(uint8_t menu_file, uint8_t main_menu, uint8_t sub_menu, uint16_t fetch_offset,
                      uint8_t max_return_bytes);
   bool get_next_user_menu_page(uint8_t max_return_bytes);
+  void start_user_menu_scan();
+  void stop_user_menu_scan();
   uint32_t next_user_menu_offset() const {
     return this->last_user_menu_response_valid_
                ? static_cast<uint32_t>(this->last_user_menu_offset_) + this->last_user_menu_data_len_
@@ -244,7 +246,9 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
   MessageType pending_poll_message_{MessageType::GET_STATUS};
   NodeType pending_poll_node_type_{NodeType::ANY};
   bool queue_next_poll_(uint32_t now, bool allow_queued_messages = false);
+  void queue_next_user_menu_scan_(uint32_t now);
   void publish_pending_message_count_();
+  void publish_user_menu_response_();
   void log_unknown_furnace_mdi_(MessageType message_type, const uint8_t *payload, uint8_t payload_len);
   bool queue_control_command_(NodeType target_type, CommandType command, const std::vector<uint8_t> &command_data);
   void read_buffer_(int bytes_available, uint32_t now);
@@ -348,6 +352,10 @@ class Comfortnet : public esphome::Component, public esphome::uart::UARTDevice {
   std::map<NodeType, std::vector<uint8_t>> network_shared_data_;
   bool last_user_menu_response_valid_{false};
   bool user_menu_request_pending_{false};
+  bool user_menu_scan_started_{false};
+  bool user_menu_scan_active_{false};
+  uint16_t user_menu_scan_index_{0};
+  uint32_t user_menu_scan_next_time_{0};
   uint8_t last_user_menu_file_{0};
   uint8_t last_user_menu_main_{0};
   uint8_t last_user_menu_sub_{0};
