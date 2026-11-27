@@ -1,4 +1,5 @@
 #include "comfortnet.h"
+#include <cstddef>
 #include <utility>
 #ifndef ARDUINO
 #include "esp_timer.h"
@@ -63,6 +64,20 @@ static const uint8_t ADDRESS_MAC_POS = 2;
 static const std::string DATA_KEY_NETWORK_STATUS = "NETWORK_STATUS";
 static const std::string DATA_KEY_PENDING_MESSAGE_COUNT = "PENDING_MESSAGE_COUNT";
 static const std::string DATA_KEY_USER_MENU_RESPONSE = "USER_MENU_RESPONSE";
+
+static std::string format_hex_pretty_(const uint8_t *data, std::size_t data_len, char separator = '.') {
+  static const char HEX_DIGITS[] = "0123456789ABCDEF";
+  std::string output;
+  output.reserve(data_len == 0 ? 0 : data_len * 3 - 1);
+  for (size_t i = 0; i < data_len; i++) {
+    if (i != 0) {
+      output.push_back(separator);
+    }
+    output.push_back(HEX_DIGITS[data[i] >> 4]);
+    output.push_back(HEX_DIGITS[data[i] & 0x0F]);
+  }
+  return output;
+}
 
 static std::string format_user_menu_display_(const uint8_t *data, uint8_t data_len) {
   std::string display;
@@ -596,15 +611,14 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
   // Notice, the checksum and payload are printed out of order here for viewing convenience!
   ESP_LOGD(TAG,
            "Dir | Dest | Src  | Subnet | Meth | Params | SrcNode | MsgType | PktNum | Len | Checksum | Payload HEX");
-  char payload_hex[3 * 255 + 1];
-  esphome::format_hex_pretty_to(payload_hex, sizeof(payload_hex), payload, payload_len, '.');
+  const std::string payload_hex = format_hex_pretty_(payload, payload_len);
   ESP_LOGD(
       TAG,
       "%s  | 0x%02X | 0x%02X | 0x%02X   | 0x%02X | 0x%04X | 0x%02X    | 0x%02X    | 0x%02X   | %-3u | 0x%04X   | %s",
       is_tx ? "TX" : "RX", static_cast<unsigned int>(dst_adr), static_cast<unsigned int>(src_adr),
       static_cast<unsigned int>(subnet), static_cast<unsigned int>(send_method), (send_param_1 << 8) | send_param_2,
       static_cast<unsigned int>(source_node_type),
-      static_cast<unsigned int>(message_type), packet_number, payload_len, crc, payload_hex);
+      static_cast<unsigned int>(message_type), packet_number, payload_len, crc, payload_hex.c_str());
   if (message_type == MessageType::GET_CONFIGURATION ||
       message_type == MessageType::GET_CONFIGURATION_RESPONSE) {
     ESP_LOGI(TAG,
@@ -613,10 +627,11 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
              is_tx ? "TX" : "RX", static_cast<unsigned int>(src_adr), static_cast<unsigned int>(dst_adr),
              static_cast<unsigned int>(subnet), static_cast<unsigned int>(send_method), send_param_1, send_param_2,
              static_cast<unsigned int>(source_node_type), static_cast<unsigned int>(message_type), packet_number,
-             payload_len, crc, payload_hex);
+              payload_len, crc, payload_hex.c_str());
     if (!is_tx && message_type == MessageType::GET_CONFIGURATION_RESPONSE) {
       if (payload_len < 2) {
-        ESP_LOGW(TAG, "GETCFG response too short for record header: len=%u payload=%s", payload_len, payload_hex);
+          ESP_LOGW(TAG, "GETCFG response too short for record header: len=%u payload=%s", payload_len,
+                   payload_hex.c_str());
       } else {
         const uint8_t record_id = payload[0];
         const uint8_t value_len = payload[1];
@@ -625,10 +640,9 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
           ESP_LOGW(TAG, "GETCFG record length mismatch: record_id=0x%02X declared=%u actual=%u", record_id,
                    value_len, static_cast<unsigned int>(actual_value_len));
         } else {
-          char value_hex[3 * MAX_PAYLOAD_SIZE + 1];
-          esphome::format_hex_pretty_to(value_hex, sizeof(value_hex), payload + 2, value_len, '.');
+          const std::string value_hex = format_hex_pretty_(payload + 2, value_len);
           ESP_LOGI(TAG, "GETCFG record: record_id=0x%02X value_length=%u value=%s", record_id, value_len,
-                   value_hex);
+                   value_hex.c_str());
         }
       }
     }
@@ -636,12 +650,11 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
   if (!is_tx && message_type == MessageType::GET_USER_MENU_RESPONSE) {
     if (payload_len < USER_MENU_REQUEST_SIZE) {
       this->last_user_menu_response_valid_ = false;
-      char response_hex[3 * MAX_PAYLOAD_SIZE + 1];
-      esphome::format_hex_pretty_to(response_hex, sizeof(response_hex), payload, payload_len, '.');
-      this->last_user_menu_response_ = "Malformed short response: " + std::string(response_hex);
+      const std::string response_hex = format_hex_pretty_(payload, payload_len);
+      this->last_user_menu_response_ = "Malformed short response: " + response_hex;
       publish_user_menu_response_();
       ESP_LOGW(TAG, "GET_USER_MENU response too short for six-byte header: len=%u payload=%s", payload_len,
-               payload_hex);
+               response_hex.c_str());
     } else {
       const uint16_t fetch_offset = static_cast<uint16_t>(payload[3]) |
                                     (static_cast<uint16_t>(payload[4]) << 8);
@@ -653,13 +666,7 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
       this->last_user_menu_data_len_ = menu_data_len;
       this->last_user_menu_response_valid_ = true;
       if (menu_data_len > 0) {
-        char menu_data_hex[3 * MAX_PAYLOAD_SIZE + 1];
-        esphome::format_hex_pretty_to(menu_data_hex, sizeof(menu_data_hex), payload + USER_MENU_REQUEST_SIZE,
-                                      menu_data_len, '.');
-        char response_text[3 * MAX_PAYLOAD_SIZE + 160];
-        snprintf(response_text, sizeof(response_text),
-                 "menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X max_return=%u data_len=%u data=%s",
-                 payload[0], payload[1], payload[2], fetch_offset, payload[5], menu_data_len, menu_data_hex);
+        const std::string menu_data_hex = format_hex_pretty_(payload + USER_MENU_REQUEST_SIZE, menu_data_len);
         this->last_user_menu_response_ =
             "Menu file " + std::to_string(payload[0]) + " / Main " + std::to_string(payload[1]) + " / Sub " +
             std::to_string(payload[2]) + " / Offset " + std::to_string(fetch_offset) + "\n" +
@@ -668,7 +675,8 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
         ESP_LOGI(TAG,
                  "GET_USER_MENU response menu_file=0x%02X main=0x%02X sub=0x%02X offset=0x%04X "
                  "max_return=%u menu_data_len=%u menu_data=%s",
-                 payload[0], payload[1], payload[2], fetch_offset, payload[5], menu_data_len, menu_data_hex);
+                 payload[0], payload[1], payload[2], fetch_offset, payload[5], menu_data_len,
+                 menu_data_hex.c_str());
       } else {
         char response_text[128];
         snprintf(response_text, sizeof(response_text),
@@ -785,13 +793,12 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
           if (msg.packet_type == MessageType::SET_CONTROL_COMMAND && msg.payload.size() >= CMD_HEADER_SIZE) {
             command_id = static_cast<uint16_t>(msg.payload[0] | (msg.payload[1] << 8));
           }
-          char payload_hex[3 * MAX_PAYLOAD_SIZE + 1];
-          esphome::format_hex_pretty_to(payload_hex, sizeof(payload_hex), msg.payload.data(), msg.payload.size(), '.');
+          const std::string payload_hex = format_hex_pretty_(msg.payload.data(), msg.payload.size());
           ESP_LOGW(TAG,
                    "Direct-poll fallback: replacing 0x94 node-list response with queued msg=0x%02X command=0x%04X "
                    "method=0x%02X route=0x%02X queue_depth=%u payload=%s",
                    static_cast<unsigned int>(msg.packet_type), command_id, static_cast<unsigned int>(msg.send_method),
-                   msg.send_param_1, static_cast<unsigned int>(pending_messages_.size()), payload_hex);
+                   msg.send_param_1, static_cast<unsigned int>(pending_messages_.size()), payload_hex.c_str());
           return_payload.insert(return_payload.end(), msg.payload.begin(), msg.payload.end());
           this->direct_poll_command_waiting_tx_ = true;
           transmit_message_(src_adr, this->node_id_, this->subnet_, msg.send_method, msg.send_param_1, 0,
@@ -831,12 +838,11 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
           if (msg.packet_type == MessageType::SET_CONTROL_COMMAND && msg.payload.size() >= CMD_HEADER_SIZE) {
             command_id = static_cast<uint16_t>(msg.payload[0] | (msg.payload[1] << 8));
           }
-          char payload_hex[3 * MAX_PAYLOAD_SIZE + 1];
-          esphome::format_hex_pretty_to(payload_hex, sizeof(payload_hex), msg.payload.data(), msg.payload.size(), '.');
+          const std::string payload_hex = format_hex_pretty_(msg.payload.data(), msg.payload.size());
           ESP_LOGI(TAG,
                    "R2R slot: sending queue front msg=0x%02X command=0x%04X method=0x%02X route=0x%02X queue_depth=%u payload=%s",
                    static_cast<unsigned int>(msg.packet_type), command_id, static_cast<unsigned int>(msg.send_method),
-                   msg.send_param_1, static_cast<unsigned int>(pending_messages_.size()), payload_hex);
+                   msg.send_param_1, static_cast<unsigned int>(pending_messages_.size()), payload_hex.c_str());
           return_payload.insert(return_payload.end(), msg.payload.begin(), msg.payload.end());
           transmit_message_(src_adr, this->node_id_, this->subnet_, msg.send_method, msg.send_param_1, 0,
                             this->device_type_, msg.packet_type,
@@ -1056,9 +1062,8 @@ void Comfortnet::handle_message_(bool is_tx, uint32_t now) {
     const uint8_t *cmd_payload = payload + CONTROL_CMD_SIZE;
     uint8_t cmd_payload_len = payload_len - CONTROL_CMD_SIZE;
     ESP_LOGD(TAG, "Command | Payload HEX");
-    char cmd_payload_hex[3 * 255 + 1];
-    esphome::format_hex_pretty_to(cmd_payload_hex, sizeof(cmd_payload_hex), cmd_payload, cmd_payload_len, '.');
-    ESP_LOGD(TAG, "0x%04X  | %s", static_cast<unsigned int>(command_type), cmd_payload_hex);
+    const std::string cmd_payload_hex = format_hex_pretty_(cmd_payload, cmd_payload_len);
+    ESP_LOGD(TAG, "0x%04X  | %s", static_cast<unsigned int>(command_type), cmd_payload_hex.c_str());
     call_command_listener_((struct ComfortnetCommandData) {
         message_type == MessageType::SET_CONTROL_COMMAND ? get_node_type_(dst_adr) : source_node_type,
         get_node_mac_(message_type == MessageType::SET_CONTROL_COMMAND ? dst_adr : src_adr), command_type,
